@@ -34,13 +34,11 @@ Game
 ├── Action (enum)
 ├── MessageLog
 └── RNG
+
+LevelGenerator (creates `Level`)
+Theme (maps characters to Tiles, enemies, and player) 
+Renderer (reads `Game` state and displays it with Ratatui)
 ```
-
-### Outside the Hierarchy
-
-- **LevelGenerator** - creates `Level`
-- **Theme** - maps characters to Tiles, enemies, and player (maybe reads config file for extra ease of theming)
-- **Renderer** - reads `Game` state and displays it. Upholds separation of UI and Logic
 
 ## Comments and Clarifications
 
