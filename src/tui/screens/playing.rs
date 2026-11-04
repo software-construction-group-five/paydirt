@@ -17,7 +17,10 @@ pub fn draw_level(frame: &mut Frame, map: &Map, depth: usize, theme: &Theme) {
     let lines: Vec<Line> = (0..map.height)
         .map(|y| {
             let row: String = (0..map.width)
-                .map(|x| map.get(Position::new(x, y)).map_or(' ', |tile| theme.tile(tile.kind)))
+                .map(|x| {
+                    map.get(Position::new(x, y))
+                        .map_or(' ', |tile| theme.tile(tile.kind))
+                })
                 .collect();
             Line::from(row)
         })

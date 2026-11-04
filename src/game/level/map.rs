@@ -59,11 +59,11 @@ impl Map {
 
     /// The tile at a position, or `None` if out of bounds.
     pub fn get(&self, pos: Position) -> Option<&Tile> {
-   		if self.in_bounds(pos) {
-   			Some(&self.tiles[self.index(pos)])
-   		} else {
-   			None
-   		}
+        if self.in_bounds(pos) {
+            Some(&self.tiles[self.index(pos)])
+        } else {
+            None
+        }
     }
 
     /// Sets the tile kind at a position. Does nothing if out of bounds.
