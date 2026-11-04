@@ -1,1 +1,7 @@
 # Theme Config (Symbol Definitions)
+[tiles]
+wall = "#"
+floor = "."
+door_open = "'"
+door_closed = "+"
+stairs_down = ">"

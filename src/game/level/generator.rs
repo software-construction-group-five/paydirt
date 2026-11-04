@@ -62,7 +62,7 @@ impl Room {
 			(diameter, diameter)
 		} else {
 			(
-				rng.random_range(RECT_MIN_SIZE..=RECT_MAX_SIZE),
+				2 * rng.random_range(RECT_MIN_SIZE..=RECT_MAX_SIZE),
 				rng.random_range(RECT_MIN_SIZE..=RECT_MAX_SIZE),
 			)
 		};
@@ -93,7 +93,7 @@ impl Room {
 		let radius = self.width / 2;
 		for y in self.y..self.y + self.height {
 			for x in self.x..self.x + self.width {	
-				let (dx, dy) = (x - center.x, y - center.y);
+				let (dx, dy) = (x.abs_diff(center.x), y.abs_diff(center.y));
 				if !self.circular || dx * dx + dy * dy <= radius * radius {
 					map.set(Position::new(x, y), TileType::Floor);
 				}
