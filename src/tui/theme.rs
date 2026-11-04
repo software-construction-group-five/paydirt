@@ -1,9 +1,6 @@
 //! Visual theme: which character/color represents each tile, enemy, item, and the player.
 //!
 //! Loaded from config/theme.toml. Purely presentational.
-//! Visual theme: which character/color represents each tile, enemy, item, and the player.
-//!
-//! Loaded from config/theme.toml. Purely presentational.
 
 use std::error::Error;
 use std::fs;
