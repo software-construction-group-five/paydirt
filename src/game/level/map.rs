@@ -81,6 +81,6 @@ impl Map {
 
     /// serialize Position into a single
     fn index(&self, pos: Position) -> usize {
-        (pos.y * self.width + pos.x) as usize
+        pos.y * self.width + pos.x
     }
 }
