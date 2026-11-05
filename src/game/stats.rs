@@ -1,4 +1,5 @@
 //! Combat and health statistics shared by Player and Enemy.
+//Derived from Player Contract 7 - Update Player Health 
 
 /// A damaging effect. Durations are measured in gameplay turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,7 +23,7 @@ impl StatusEffect {
 }
 
 /// Health, combat values, and at most three active status effects.
-pub struct Stats {
+pub struct Stats { 
     hp: i32,
     max_hp: i32,
     attack: i32,
