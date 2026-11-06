@@ -44,4 +44,17 @@ impl Enemy{
     pub fn get_enemy(self, _enemyID: i32) -> Enemy {//underscore because enemyID is currently unsused
         self
     }
+
+    // - 13 Enemy Update: update position and AI state
+    //(Contract 13, Protocol 1)
+    pub fn update_position(&mut self, newPosition: position::Position){
+        self.position = newPosition;
+    }
+
+    //(Contract 13, Protocol 2) 
+    //CRC card lists method header as fn update_status(&mut self, statusCode: i32, effect: String) this is handled in ai state now
+    pub fn update_status(&mut self){
+        //add a method in ai state to check the different factors and update the ai state then call from here
+        //self.ai.update(); 
+    }
 }
