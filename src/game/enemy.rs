@@ -64,3 +64,9 @@ impl Enemy{
         self.stats.attack();
     }
 }
+
+//Test Suggestions
+
+//Test that get_roll returns the attack value from stats
+
+//Test that get_enemy returns the correct enemy
