@@ -57,4 +57,10 @@ impl Enemy{
         //add a method in ai state to check the different factors and update the ai state then call from here
         //self.ai.update(); 
     }
+
+    // - 14 Combat Information: attack roll
+    //(Contract 14, Protocol 1)
+    pub fn get_roll(&self){
+        self.stats.attack();
+    }
 }
