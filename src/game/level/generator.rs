@@ -120,3 +120,76 @@ fn carve_line(map: &mut Map, a: Position, b: Position) {
         }
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// TESTS
+////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    /// Generates maps for several depths and seeds, so circles are included.
+    fn sample_maps() -> Vec<Map> {
+        let mut maps = Vec::new();
+        for depth in 0..10 {
+            for seed in 0..20 {
+                let mut rng = StdRng::seed_from_u64(seed);
+                maps.push(LevelGenerator::generate_map(depth, &mut rng));
+            }
+        }
+        maps
+    }
+
+    #[test]
+    fn outer_edge_is_always_wall() {
+        for map in sample_maps() {
+            for x in 0..map.width {
+                for y in 0..map.height {
+                    let on_edge = x == 0 || y == 0 || x == map.width - 1 || y == map.height - 1;
+                    if on_edge {
+                        assert!(
+                            !map.is_walkable(Position::new(x, y)),
+                            "floor on edge at ({x}, {y})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_floor_tile_is_reachable() {
+        for map in sample_maps() {
+            let floors: Vec<Position> = (0..map.height)
+                .flat_map(|y| (0..map.width).map(move |x| Position::new(x, y)))
+                .filter(|&pos| map.is_walkable(pos))
+                .collect();
+            assert!(!floors.is_empty(), "map has no floor");
+
+            // Flood fill from the first floor tile, stepping in four directions.
+            let mut reached = std::collections::HashSet::from([floors[0]]);
+            let mut frontier = vec![floors[0]];
+            while let Some(pos) = frontier.pop() {
+                let neighbors = [
+                    pos.x.checked_sub(1).map(|x| Position::new(x, pos.y)),
+                    pos.y.checked_sub(1).map(|y| Position::new(pos.x, y)),
+                    Some(Position::new(pos.x + 1, pos.y)),
+                    Some(Position::new(pos.x, pos.y + 1)),
+                ];
+                for next in neighbors.into_iter().flatten() {
+                    if map.is_walkable(next) && reached.insert(next) {
+                        frontier.push(next);
+                    }
+                }
+            }
+            assert_eq!(
+                reached.len(),
+                floors.len(),
+                "some floor tiles are unreachable"
+            );
+        }
+    }
+}
