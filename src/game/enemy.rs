@@ -31,4 +31,7 @@ pub struct Enemy {
 /// Enemy species. Each maps to an AiProfile that drives divergent behavior.
 pub enum EnemyType {
 	// TODO: Come up with some enemy types
+    Goblin,
+    Ghost,
+    Slime,
 }
