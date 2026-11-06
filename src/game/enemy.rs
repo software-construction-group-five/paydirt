@@ -35,3 +35,13 @@ pub enum EnemyType {
     Ghost,
     Slime,
 }
+
+impl Enemy{
+    //Creates Enemy
+
+    // - 12 Get Current Enemy State: position, AI state, health
+    // returns enemyID as currently the file structure does not allow for returning the enemy (Contract 12, Protocol 1)
+    pub fn get_enemy(self, _enemyID: i32) -> Enemy {//underscore because enemyID is currently unsused
+        self
+    }
+}
