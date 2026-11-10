@@ -86,8 +86,11 @@ impl Enemy{
     //(Contract 13, Protocol 2) 
     //CRC card lists method header as fn update_status(&mut self, statusCode: i32, effect: String) this is handled in ai state now
     pub fn update_status(&mut self){
-        //add a method in ai state to check the different factors and update the ai state then call from here
-        //self.ai.update(); 
+        match self.ai{
+            AiState::Attacking => self.ai = AiState::Attacking,// continue attacking
+            AiState::Fleeing => self.ai = AiState::Fleeing,//continue fleeing
+            AiState::Idle => self.ai = if self.stats.hp() >= self.flee_below_hp { AiState::Attacking } else { AiState::Fleeing },
+        }
     }
 
     // - 14 Combat Information: attack roll
