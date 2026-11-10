@@ -1,6 +1,6 @@
 # Action names map to lists of keys. Screen sections allow context-specific keys.
 # Named keys: up, down, left, right, enter, esc, space, tab, backspace,
-# delete, home, end, pageup, pagedown, plus. Modifiers: ctrl+, alt+, shift+.
+# delete, home, end, pageup, pagedown, plus, backtab (or shift+tab). Modifiers: ctrl+, alt+, shift+.
 # Global keys apply everywhere and must not conflict with screen bindings.
 
 [global]

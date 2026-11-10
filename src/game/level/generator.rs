@@ -4,8 +4,6 @@
 //! Entity population is deferred while Enemy and Item remain scaffolding.
 //! Stateless between calls; Game decides when a level is needed.
 
-use std::collections::VecDeque;
-
 use rand::{Rng, RngExt, seq::SliceRandom};
 
 use crate::game::level::{
@@ -37,7 +35,7 @@ impl LevelGenerator {
     /// Entity collections remain empty until Enemy and Item constructors are merged.
     pub fn generate_level(depth: u32, rng: &mut impl Rng) -> Level {
         let (mut map, player_start) = generate_layout(depth, rng);
-        let stairs_down = farthest_floor(&map, player_start);
+        let stairs_down = explore(&map, player_start).0;
         map.set(stairs_down, TileType::StairsDown);
         let pending_spawns = plan_spawns(&map, depth, player_start, stairs_down, rng);
         Level::new(map, depth, player_start, stairs_down, pending_spawns)
@@ -71,20 +69,17 @@ fn generate_layout(depth: u32, rng: &mut impl Rng) -> (Map, Position) {
     (map, player_start)
 }
 
-/// Finds a distant exit along routes that can be used after opening doors.
-fn farthest_floor(map: &Map, start: Position) -> Position {
-    explore(map, start).0
-}
-
 /// Returns the most distant floor and connected tile count with doors openable.
 /// This topology check excludes rocks, water, and walls without changing doors.
 fn explore(map: &Map, start: Position) -> (Position, usize) {
-    let mut reached = vec![false; map.width * map.height];
-    reached[start.y * map.width + start.x] = true;
-    let mut frontier = VecDeque::from([start]);
+    let mut reached = vec![false; map.width() * map.height()];
+    reached[start.y * map.width() + start.x] = true;
+    let mut frontier = Vec::with_capacity(reached.len());
+    frontier.push(start);
     let mut farthest = start;
     let mut count = 0;
-    while let Some(position) = frontier.pop_front() {
+    while count < frontier.len() {
+        let position = frontier[count];
         count += 1;
         if map
             .get(position)
@@ -92,28 +87,10 @@ fn explore(map: &Map, start: Position) -> (Position, usize) {
         {
             farthest = position;
         }
-        let neighbors = [
-            position
-                .x
-                .checked_sub(1)
-                .map(|x| Position::new(x, position.y)),
-            position
-                .y
-                .checked_sub(1)
-                .map(|y| Position::new(position.x, y)),
-            position
-                .x
-                .checked_add(1)
-                .map(|x| Position::new(x, position.y)),
-            position
-                .y
-                .checked_add(1)
-                .map(|y| Position::new(position.x, y)),
-        ];
-        for next in neighbors.into_iter().flatten() {
-            if connected_terrain(map, next) && !reached[next.y * map.width + next.x] {
-                reached[next.y * map.width + next.x] = true;
-                frontier.push_back(next);
+        for next in map.neighbors(position) {
+            if connected_terrain(map, next) && !reached[next.y * map.width() + next.x] {
+                reached[next.y * map.width() + next.x] = true;
+                frontier.push(next);
             }
         }
     }
@@ -129,8 +106,8 @@ fn connected_terrain(map: &Map, position: Position) -> bool {
 /// Adds spaced, closed doors where a narrow hallway meets a room boundary.
 fn add_doors(map: &mut Map, rooms: &[Room], rng: &mut impl Rng) {
     let mut candidates = Vec::new();
-    for y in 1..map.height - 1 {
-        for x in 1..map.width - 1 {
+    for y in 1..map.height() - 1 {
+        for x in 1..map.width() - 1 {
             let position = Position::new(x, y);
             if rooms.iter().any(|room| room.contains(position))
                 || map.get(position).unwrap().kind != TileType::Floor
@@ -175,6 +152,44 @@ fn add_doors(map: &mut Map, rooms: &[Room], rng: &mut impl Rng) {
     }
 }
 
+/// Keeps decoration away from room centers, the player, and narrow entrances.
+fn obstacle_site(map: &Map, room: &Room, start: Position, position: Position) -> bool {
+    room.contains(position)
+        && position != room.center()
+        && position
+            .x
+            .abs_diff(start.x)
+            .max(position.y.abs_diff(start.y))
+            > 2
+        && map
+            .get(position)
+            .is_some_and(|tile| tile.kind == TileType::Floor)
+        && map
+            .neighbors(position)
+            .all(|next| map.get(next).unwrap().kind == TileType::Floor)
+}
+
+/// Applies a whole obstacle or restores its floor tiles if it seals another route.
+fn try_obstacle(
+    map: &mut Map,
+    tiles: &[Position],
+    kind: TileType,
+    start: Position,
+    connected: &mut usize,
+) -> bool {
+    for &position in tiles {
+        map.set(position, kind);
+    }
+    if explore(map, start).1 == *connected - tiles.len() {
+        *connected -= tiles.len();
+        return true;
+    }
+    for &position in tiles {
+        map.set(position, TileType::Floor);
+    }
+    false
+}
+
 /// Places a rounded pool in some large circular rooms, accepting the whole blob
 /// only when dry routes and room entrances remain usable.
 fn add_water(map: &mut Map, rooms: &[Room], start: Position, rng: &mut impl Rng) {
@@ -207,26 +222,12 @@ fn add_water(map: &mut Map, rooms: &[Room], start: Position, rng: &mut impl Rng)
                 center.y.checked_add_signed(dy).unwrap(),
             );
             let pool = water_blob(center, radius, lobe);
-            if !pool.iter().all(|&position| {
-                room.contains(position)
-                    && !rooms.iter().any(|room| room.center() == position)
-                    && position.x.abs_diff(start.x).max(position.y.abs_diff(start.y)) > 2
-                    // Preserve a dry rim and never replace doors or their approach tiles.
-                    && [(position.x, position.y), (position.x - 1, position.y),
-                        (position.x + 1, position.y), (position.x, position.y - 1),
-                        (position.x, position.y + 1)].into_iter().all(|(x, y)|
-                            map.get(Position::new(x, y)).is_some_and(|tile| tile.kind == TileType::Floor))
-            }) { continue; }
-            for &position in &pool {
-                map.set(position, TileType::Water);
-            }
-            // Reject the entire pool rather than trimming it into scattered water tiles.
-            if explore(map, start).1 == connected_count - pool.len() {
-                connected_count -= pool.len();
+            if pool
+                .iter()
+                .all(|&position| obstacle_site(map, room, start, position))
+                && try_obstacle(map, &pool, TileType::Water, start, &mut connected_count)
+            {
                 break;
-            }
-            for position in pool {
-                map.set(position, TileType::Floor);
             }
         }
     }
@@ -262,27 +263,10 @@ fn add_rocks(map: &mut Map, rooms: &[Room], start: Position, rng: &mut impl Rng)
         if !rng.random_bool(ROCK_ROOM_CHANCE) {
             continue;
         }
-        let mut candidates = Vec::new();
-        for y in room.y + 1..room.y + room.height - 1 {
-            for x in room.x + 1..room.x + room.width - 1 {
-                let position = Position::new(x, y);
-                if !room.contains(position)
-                    || rooms.iter().any(|room| room.center() == position)
-                    || x.abs_diff(start.x).max(y.abs_diff(start.y)) <= 2
-                {
-                    continue;
-                }
-                let interior = [(x, y), (x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]
-                    .into_iter()
-                    .all(|(x, y)| {
-                        map.get(Position::new(x, y))
-                            .is_some_and(|tile| tile.kind == TileType::Floor)
-                    });
-                if interior {
-                    candidates.push(position);
-                }
-            }
-        }
+        let mut candidates: Vec<_> = room
+            .positions()
+            .filter(|&position| obstacle_site(map, room, start, position))
+            .collect();
         candidates.shuffle(rng);
         let target = rng.random_range(1..=2);
         let mut placed = 0;
@@ -290,13 +274,8 @@ fn add_rocks(map: &mut Map, rooms: &[Room], start: Position, rng: &mut impl Rng)
             if placed == target {
                 break;
             }
-            map.set(position, TileType::Rock);
-            // Test the final carved layout, including hallways that cross rooms.
-            if explore(map, start).1 == walkable_count - 1 {
-                walkable_count -= 1;
+            if try_obstacle(map, &[position], TileType::Rock, start, &mut walkable_count) {
                 placed += 1;
-            } else {
-                map.set(position, TileType::Floor);
             }
         }
     }
@@ -310,8 +289,8 @@ fn plan_spawns(
     exit: Position,
     rng: &mut impl Rng,
 ) -> SpawnPlan {
-    let mut available: Vec<_> = (0..map.height)
-        .flat_map(|y| (0..map.width).map(move |x| Position::new(x, y)))
+    let mut available: Vec<_> = map
+        .positions()
         .filter(|&position| {
             map.get(position).is_some_and(|tile| tile.kind == TileType::Floor)
                 // Keep a small safe area around Pete, including diagonal neighbors.
@@ -386,14 +365,17 @@ impl Room {
         !self.circular || dx * dx + dy * dy <= (self.width / 2).pow(2)
     }
 
-    /// Turns the room's tiles into floor
+    /// Visits the room's actual shape rather than its bounding-box corners.
+    fn positions(&self) -> impl Iterator<Item = Position> + '_ {
+        (self.y..self.y + self.height)
+            .flat_map(|y| (self.x..self.x + self.width).map(move |x| Position::new(x, y)))
+            .filter(|&position| self.contains(position))
+    }
+
+    /// Turns the room's tiles into floor.
     fn carve(&self, map: &mut Map) {
-        for y in self.y..self.y + self.height {
-            for x in self.x..self.x + self.width {
-                if self.contains(Position::new(x, y)) {
-                    map.set(Position::new(x, y), TileType::Floor);
-                }
-            }
+        for position in self.positions() {
+            map.set(position, TileType::Floor);
         }
     }
 }
@@ -429,78 +411,17 @@ mod tests {
     use rand::rngs::StdRng;
 
     /// Generates levels for several depths and seeds, so circles are included.
-    fn sample_levels() -> Vec<Level> {
-        let mut levels = Vec::new();
-        for depth in 0..10 {
-            for seed in 0..20 {
-                let mut rng = StdRng::seed_from_u64(seed);
-                levels.push(LevelGenerator::generate_level(depth, &mut rng));
-            }
-        }
-        levels
+    fn sample_levels() -> impl Iterator<Item = Level> {
+        (0..10).flat_map(|depth| {
+            (0..20).map(move |seed| {
+                LevelGenerator::generate_level(depth, &mut StdRng::seed_from_u64(seed))
+            })
+        })
     }
 
     #[test]
-    fn outer_edge_is_always_wall() {
-        for level in sample_levels() {
-            let map = level.get_map();
-            for x in 0..map.width {
-                for y in 0..map.height {
-                    let on_edge = x == 0 || y == 0 || x == map.width - 1 || y == map.height - 1;
-                    if on_edge {
-                        assert!(
-                            !map.is_walkable(Position::new(x, y)),
-                            "floor on edge at ({x}, {y})"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn every_floor_tile_is_reachable_after_opening_doors() {
-        for level in sample_levels() {
-            let map = level.get_map();
-            let floors: Vec<Position> = (0..map.height)
-                .flat_map(|y| (0..map.width).map(move |x| Position::new(x, y)))
-                .filter(|&pos| {
-                    map.get(pos).is_some_and(|tile| {
-                        tile.kind.is_walkable() || matches!(tile.kind, TileType::Door { .. })
-                    })
-                })
-                .collect();
-            assert!(!floors.is_empty(), "map has no floor");
-
-            // Flood fill from the player start, including stairs and reserved spawns.
-            let mut reached = std::collections::HashSet::from([level.player_start()]);
-            let mut frontier = vec![level.player_start()];
-            while let Some(pos) = frontier.pop() {
-                let neighbors = [
-                    pos.x.checked_sub(1).map(|x| Position::new(x, pos.y)),
-                    pos.y.checked_sub(1).map(|y| Position::new(pos.x, y)),
-                    Some(Position::new(pos.x + 1, pos.y)),
-                    Some(Position::new(pos.x, pos.y + 1)),
-                ];
-                for next in neighbors.into_iter().flatten() {
-                    let passable_after_opening = map.get(next).is_some_and(|tile| {
-                        tile.kind.is_walkable() || matches!(tile.kind, TileType::Door { .. })
-                    });
-                    if passable_after_opening && reached.insert(next) {
-                        frontier.push(next);
-                    }
-                }
-            }
-            assert_eq!(
-                reached.len(),
-                floors.len(),
-                "some floor tiles are unreachable"
-            );
-        }
-    }
-
-    #[test]
-    fn anchors_and_spawn_plans_are_safe_across_depths_and_seeds() {
+    fn generated_levels_preserve_navigation_and_spawn_invariants() {
+        let (mut doors, mut rocks, mut water) = (0, 0, 0);
         for level in sample_levels() {
             let map = level.get_map();
             let start = level.player_start();
@@ -508,17 +429,78 @@ mod tests {
             assert_ne!(start, exit);
             assert_eq!(map.get(start).unwrap().kind, TileType::Floor);
             assert_eq!(map.get(exit).unwrap().kind, TileType::StairsDown);
-            let stairs_count = (0..map.height)
-                .flat_map(|y| (0..map.width).map(move |x| Position::new(x, y)))
-                .filter(|&position| map.get(position).unwrap().kind == TileType::StairsDown)
-                .count();
-            assert_eq!(stairs_count, 1);
+            let (mut connected_tiles, mut stairs) = (0, 0);
+            for position in map.positions() {
+                let (x, y) = (position.x, position.y);
+                let kind = map.get(position).unwrap().kind;
+                if x == 0 || y == 0 || x + 1 == map.width() || y + 1 == map.height() {
+                    assert_eq!(kind, TileType::Wall);
+                }
+                if kind.is_walkable() || matches!(kind, TileType::Door { .. }) {
+                    connected_tiles += 1;
+                }
+                match kind {
+                    TileType::StairsDown => stairs += 1,
+                    TileType::Door { open } => {
+                        doors += 1;
+                        assert!(!open);
+                        assert!(!level.is_walkable(position));
+                        let wall =
+                            |x, y| map.get(Position::new(x, y)).unwrap().kind == TileType::Wall;
+                        assert!(
+                            (wall(x, y - 1)
+                                && wall(x, y + 1)
+                                && map.is_walkable(Position::new(x - 1, y))
+                                && map.is_walkable(Position::new(x + 1, y)))
+                                || (wall(x - 1, y)
+                                    && wall(x + 1, y)
+                                    && map.is_walkable(Position::new(x, y - 1))
+                                    && map.is_walkable(Position::new(x, y + 1)))
+                        );
+                    }
+                    TileType::Rock | TileType::Water => {
+                        if kind == TileType::Rock {
+                            rocks += 1;
+                        } else {
+                            water += 1;
+                        }
+                        assert!(level.depth() > 0);
+                        assert!(!level.is_walkable(position));
+                        assert!(x.abs_diff(start.x).max(y.abs_diff(start.y)) > 2);
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(stairs, 1);
+            // Independent flood fill: verify all terrain is reachable after opening doors.
+            let mut reached = std::collections::HashSet::from([start]);
+            let mut frontier = vec![start];
+            while let Some(pos) = frontier.pop() {
+                for next in [
+                    pos.x.checked_sub(1).map(|x| Position::new(x, pos.y)),
+                    pos.y.checked_sub(1).map(|y| Position::new(pos.x, y)),
+                    Some(Position::new(pos.x + 1, pos.y)),
+                    Some(Position::new(pos.x, pos.y + 1)),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    let passable = map.get(next).is_some_and(|tile| {
+                        tile.kind.is_walkable() || matches!(tile.kind, TileType::Door { .. })
+                    });
+                    if passable && reached.insert(next) {
+                        frontier.push(next);
+                    }
+                }
+            }
+            assert_eq!(reached.len(), connected_tiles);
+            assert!(reached.contains(&exit));
             let plan = level.pending_spawns();
-            assert!(!plan.enemies.is_empty());
-            assert!(!plan.items.is_empty());
+            assert!(!plan.enemies.is_empty() && !plan.items.is_empty());
             let mut occupied = std::collections::HashSet::from([start, exit]);
             for &position in plan.enemies.iter().chain(&plan.items) {
-                assert!(occupied.insert(position), "overlapping reserved placement");
+                assert!(occupied.insert(position));
+                assert!(reached.contains(&position));
                 assert_eq!(map.get(position).unwrap().kind, TileType::Floor);
                 assert!(
                     position
@@ -528,10 +510,9 @@ mod tests {
                         > 2
                 );
             }
-            // Placeholder plans must not masquerade as constructed entity instances.
-            assert!(level.get_enemies().is_empty());
-            assert!(level.get_floor_items().is_empty());
+            assert!(level.get_enemies().is_empty() && level.get_floor_items().is_empty());
         }
+        assert!(doors > 0 && rocks > 0 && water > 0);
     }
 
     #[test]
@@ -555,49 +536,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn decorations_include_closed_doors_and_nonwalkable_rocks() {
-        let mut doors = 0;
-        let mut rocks = 0;
-        for level in sample_levels() {
-            let map = level.get_map();
-            for y in 1..map.height - 1 {
-                for x in 1..map.width - 1 {
-                    match map.get(Position::new(x, y)).unwrap().kind {
-                        TileType::Door { open } => {
-                            doors += 1;
-                            assert!(!open, "generated doors must start closed");
-                            assert!(!level.is_walkable(Position::new(x, y)));
-                            let wall =
-                                |x, y| map.get(Position::new(x, y)).unwrap().kind == TileType::Wall;
-                            assert!(
-                                (wall(x, y - 1)
-                                    && wall(x, y + 1)
-                                    && map.is_walkable(Position::new(x - 1, y))
-                                    && map.is_walkable(Position::new(x + 1, y)))
-                                    || (wall(x - 1, y)
-                                        && wall(x + 1, y)
-                                        && map.is_walkable(Position::new(x, y - 1))
-                                        && map.is_walkable(Position::new(x, y + 1)))
-                            );
-                        }
-                        TileType::Rock => {
-                            rocks += 1;
-                            assert!(level.depth() > 0, "first-floor rooms are rectangular");
-                            let position = Position::new(x, y);
-                            assert!(!level.is_walkable(position));
-                            assert!(!level.pending_spawns().enemies.contains(&position));
-                            assert!(!level.pending_spawns().items.contains(&position));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        assert!(doors > 0, "no doors appeared across seeded levels");
-        assert!(rocks > 0, "no rocks appeared across seeded levels");
     }
 
     #[test]
@@ -627,8 +565,8 @@ mod tests {
             carve_line(&mut map, rooms[0].center(), rooms[1].center());
             let start = rooms[1].center();
             add_rocks(&mut map, &rooms, start, &mut StdRng::seed_from_u64(seed));
-            for y in 0..map.height {
-                for x in 0..map.width {
+            for y in 0..map.height() {
+                for x in 0..map.width() {
                     let position = Position::new(x, y);
                     if map.get(position).unwrap().kind == TileType::Rock {
                         total += 1;
@@ -672,8 +610,8 @@ mod tests {
                 }
                 carve_line(&mut map, rooms[0].center(), rooms[1].center());
                 add_doors(&mut map, &rooms, &mut StdRng::seed_from_u64(seed));
-                for y in 0..map.height {
-                    for x in 0..map.width {
+                for y in 0..map.height() {
+                    for x in 0..map.width() {
                         let position = Position::new(x, y);
                         if let TileType::Door { open } = map.get(position).unwrap().kind {
                             assert!(
@@ -715,33 +653,6 @@ mod tests {
     }
 
     #[test]
-    fn water_appears_in_generated_levels_and_never_receives_spawns() {
-        let mut count = 0;
-        for level in sample_levels() {
-            let map = level.get_map();
-            for y in 0..map.height {
-                for x in 0..map.width {
-                    let position = Position::new(x, y);
-                    if map.get(position).unwrap().kind == TileType::Water {
-                        count += 1;
-                        assert!(level.depth() > 0);
-                        assert!(!level.is_walkable(position));
-                        assert!(!connected_terrain(map, position));
-                        assert!(!level.pending_spawns().enemies.contains(&position));
-                        assert!(!level.pending_spawns().items.contains(&position));
-                        assert!(
-                            x.abs_diff(level.player_start().x)
-                                .max(y.abs_diff(level.player_start().y))
-                                > 2
-                        );
-                    }
-                }
-            }
-        }
-        assert!(count > 0, "no pools generated across seeded levels");
-    }
-
-    #[test]
     fn pools_are_connected_and_only_appear_in_large_circular_rooms() {
         let rooms = [
             Room {
@@ -776,8 +687,8 @@ mod tests {
             let start = rooms[2].center();
             let before = explore(&map, start).1;
             add_water(&mut map, &rooms, start, &mut StdRng::seed_from_u64(seed));
-            let water: std::collections::HashSet<_> = (0..map.height)
-                .flat_map(|y| (0..map.width).map(move |x| Position::new(x, y)))
+            let water: std::collections::HashSet<_> = map
+                .positions()
                 .filter(|&position| map.get(position).unwrap().kind == TileType::Water)
                 .collect();
             assert_eq!(explore(&map, start).1, before - water.len());
@@ -816,5 +727,34 @@ mod tests {
             .collect();
         assert_eq!(rows, [2, 4, 2]);
         assert_eq!(tiles.len(), 8);
+    }
+
+    #[test]
+    fn rejected_obstacles_restore_floor_and_connected_count() {
+        let mut map = Map::new(7, 5);
+        let start = Position::new(1, 2);
+        carve_line(&mut map, start, Position::new(5, 2));
+        let bridge = Position::new(3, 2);
+        let mut connected = explore(&map, start).1;
+        assert!(!try_obstacle(
+            &mut map,
+            &[bridge],
+            TileType::Rock,
+            start,
+            &mut connected
+        ));
+        assert_eq!(map.get(bridge).unwrap().kind, TileType::Floor);
+        assert_eq!(connected, 5);
+        // A parallel path makes the same obstacle safe to keep.
+        carve_line(&mut map, Position::new(1, 1), Position::new(5, 1));
+        connected = explore(&map, start).1;
+        assert!(try_obstacle(
+            &mut map,
+            &[bridge],
+            TileType::Rock,
+            start,
+            &mut connected
+        ));
+        assert_eq!(connected, 9);
     }
 }

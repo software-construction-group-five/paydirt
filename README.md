@@ -34,7 +34,9 @@ Preview commands are active only in the level view, not in menus or inventory.
 an owned dungeon floor. Game supplies the RNG and decides when to request a new
 floor. The existing map preview now renders the returned Level's map.
 
-- `get_map()` and `is_walkable(position)` provide terrain access.
+- `get_map()` and `is_walkable(position)` provide terrain access. Map dimensions
+  are read through `width()`/`height()`; `positions()` and `neighbors(position)`
+  provide bounded iteration.
 - `depth()`, `player_start()`, and `stairs_down()` provide progression data.
 - `get_enemies()` and `get_floor_items()` expose entity collections.
 - `pending_spawns()` contains reserved enemy and item positions. These never

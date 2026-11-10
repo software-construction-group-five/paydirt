@@ -6,7 +6,7 @@ use std::{io, path::Path};
 
 use crossterm::event::{self, Event};
 use paydirt::{
-    game::{Game, action::Action, screen::Screen},
+    game::{Game, screen::Screen},
     tui::{
         LevelView, RenderView, Renderer,
         input::{Keybinds, PreviewCommand},
@@ -69,7 +69,6 @@ fn run(terminal: &mut DefaultTerminal, renderer: &Renderer, keybinds: &Keybinds)
                 match keybinds.preview_command(key) {
                     Some(PreviewCommand::Regenerate) => game.regenerate_preview(),
                     Some(PreviewCommand::NextLevel) => game.advance_preview(),
-                    Some(PreviewCommand::Quit) => game.process_action(&Action::Quit),
                     None => {}
                 }
             }

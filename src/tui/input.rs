@@ -10,12 +10,13 @@ use crate::game::{action::Action, screen::Screen};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use serde::Deserialize;
 
-/// Configured keys grouped by action, preserving their display order.
-struct Binding {
-    action: Action,
-    keys: Vec<(KeyCode, KeyModifiers)>,
-    labels: Vec<String>,
-    description: &'static str,
+type Key = (KeyCode, KeyModifiers);
+
+// Share parsing and preformatted hints between gameplay and preview bindings.
+struct Binding<T> {
+    action: T,
+    keys: Vec<Key>,
+    hint: String,
 }
 
 /// Commands supported only by the generated-level viewer, outside gameplay.
@@ -25,21 +26,13 @@ pub enum PreviewCommand {
     Regenerate,
     /// Preview the next dungeon depth.
     NextLevel,
-    /// Close the terminal viewer.
-    Quit,
-}
-
-struct PreviewBinding {
-    command: PreviewCommand,
-    keys: Vec<(KeyCode, KeyModifiers)>,
-    labels: Vec<String>,
 }
 
 /// Global bindings and screen-specific action mappings.
 pub struct Keybinds {
-    global: Vec<Binding>,
-    screens: [Vec<Binding>; 5],
-    preview: Vec<PreviewBinding>,
+    global: Vec<Binding<Action>>,
+    screens: [Vec<Binding<Action>>; 5],
+    preview: Vec<Binding<PreviewCommand>>,
 }
 
 #[derive(Deserialize)]
@@ -84,47 +77,31 @@ impl Keybinds {
         .enumerate()
         {
             screens[index] = bindings(table)?;
-            let mut occupied = HashSet::new();
-            for binding in global.iter().chain(&screens[index]) {
-                for key in &binding.keys {
-                    if !occupied.insert(*key) {
-                        return Err(invalid(format!(
-                            "duplicate key binding: {key:?} in screen {index}"
-                        )));
-                    }
-                }
-            }
+            check_keys(
+                global
+                    .iter()
+                    .chain(&screens[index])
+                    .flat_map(|binding| &binding.keys),
+                &format!("screen {index}"),
+            )?;
         }
         let mut preview = Vec::new();
-        let mut occupied: HashSet<_> = global
-            .iter()
-            .chain(&screens[1])
-            .flat_map(|binding| binding.keys.iter().copied())
-            .collect();
         for (name, labels) in config.preview {
-            let command = match name.as_str() {
-                "regenerate" => PreviewCommand::Regenerate,
-                "next_level" => PreviewCommand::NextLevel,
+            let (command, description) = match name.as_str() {
+                "regenerate" => (PreviewCommand::Regenerate, "regenerate"),
+                "next_level" => (PreviewCommand::NextLevel, "deeper"),
                 _ => return Err(invalid(format!("unknown preview command: {name}"))),
             };
-            if labels.is_empty() {
-                return Err(invalid(format!("{name} needs at least one key")));
-            }
-            let keys: Vec<_> = labels
-                .iter()
-                .map(|label| parse_key(label))
-                .collect::<io::Result<_>>()?;
-            for key in &keys {
-                if !occupied.insert(*key) {
-                    return Err(invalid(format!("duplicate preview key: {key:?}")));
-                }
-            }
-            preview.push(PreviewBinding {
-                command,
-                keys,
-                labels,
-            });
+            preview.push(binding(command, description, labels)?);
         }
+        check_keys(
+            global
+                .iter()
+                .chain(&screens[1])
+                .flat_map(|binding| &binding.keys)
+                .chain(preview.iter().flat_map(|binding| &binding.keys)),
+            "preview",
+        )?;
         Ok(Self {
             global,
             screens,
@@ -140,7 +117,7 @@ impl Keybinds {
         self.global
             .iter()
             .chain(&self.screens[screen_index(screen)])
-            .find(|binding| binding.keys.contains(&(key.code, key.modifiers)))
+            .find(|binding| binding.keys.contains(&key_chord(key.code, key.modifiers)))
             .map(|binding| &binding.action)
     }
 
@@ -149,49 +126,32 @@ impl Keybinds {
         if key.kind != KeyEventKind::Press {
             return None;
         }
-        let key = (key.code, key.modifiers);
-        if self
-            .global
-            .iter()
-            .any(|binding| matches!(binding.action, Action::Quit) && binding.keys.contains(&key))
-        {
-            return Some(PreviewCommand::Quit);
-        }
+        let key = key_chord(key.code, key.modifiers);
         self.preview
             .iter()
             .find(|binding| binding.keys.contains(&key))
-            .map(|binding| binding.command)
+            .map(|binding| binding.action)
     }
 
     /// Builds viewer hints from its configured commands and global quit keys.
     pub fn preview_help(&self) -> String {
-        let mut hints: Vec<_> = self
-            .preview
+        self.preview
             .iter()
-            .map(|binding| {
-                let label = match binding.command {
-                    PreviewCommand::Regenerate => "regenerate",
-                    PreviewCommand::NextLevel => "deeper",
-                    PreviewCommand::Quit => "quit",
-                };
-                format!("{}: {label}", binding.labels.join("/"))
-            })
-            .collect();
-        for binding in &self.screens[1] {
-            if matches!(binding.action, Action::OpenInventory | Action::Pause) {
-                hints.push(format!(
-                    "{}: {}",
-                    binding.labels.join("/"),
-                    binding.description
-                ));
-            }
-        }
-        for binding in &self.global {
-            if matches!(binding.action, Action::Quit) {
-                hints.push(format!("{}: quit", binding.labels.join("/")));
-            }
-        }
-        hints.join("  ")
+            .map(|binding| binding.hint.as_str())
+            .chain(
+                self.screens[1]
+                    .iter()
+                    .chain(&self.global)
+                    .filter(|binding| {
+                        matches!(
+                            binding.action,
+                            Action::OpenInventory | Action::Pause | Action::Quit
+                        )
+                    })
+                    .map(|binding| binding.hint.as_str()),
+            )
+            .collect::<Vec<_>>()
+            .join("  ")
     }
 
     /// Builds control hints from the same mappings used to interpret input.
@@ -199,7 +159,7 @@ impl Keybinds {
         self.screens[screen_index(screen)]
             .iter()
             .chain(&self.global)
-            .map(|binding| format!("{}: {}", binding.labels.join("/"), binding.description))
+            .map(|binding| binding.hint.as_str())
             .collect::<Vec<_>>()
             .join("  ")
     }
@@ -215,7 +175,7 @@ fn screen_index(screen: &Screen) -> usize {
     }
 }
 
-fn bindings(table: BTreeMap<String, Vec<String>>) -> io::Result<Vec<Binding>> {
+fn bindings(table: BTreeMap<String, Vec<String>>) -> io::Result<Vec<Binding<Action>>> {
     table
         .into_iter()
         .map(|(name, labels)| {
@@ -233,27 +193,50 @@ fn bindings(table: BTreeMap<String, Vec<String>>) -> io::Result<Vec<Binding>> {
                 "quit" => (Action::Quit, "quit"),
                 _ => return Err(invalid(format!("unknown action: {name}"))),
             };
-            if labels.is_empty() {
-                return Err(invalid(format!("{name} needs at least one key")));
-            }
-            let keys = labels
-                .iter()
-                .map(|label| parse_key(label))
-                .collect::<io::Result<_>>()?;
-            Ok(Binding {
-                action,
-                keys,
-                labels,
-                description,
-            })
+            binding(action, description, labels)
         })
         .collect()
 }
 
-fn parse_key(label: &str) -> io::Result<(KeyCode, KeyModifiers)> {
-    let parts: Vec<_> = label.split('+').collect();
+fn binding<T>(action: T, description: &str, labels: Vec<String>) -> io::Result<Binding<T>> {
+    if labels.is_empty() {
+        return Err(invalid(format!("{description} needs at least one key")));
+    }
+    let keys = labels
+        .iter()
+        .map(|label| parse_key(label))
+        .collect::<io::Result<_>>()?;
+    Ok(Binding {
+        action,
+        keys,
+        hint: format!("{}: {description}", labels.join("/")),
+    })
+}
+
+fn check_keys<'a>(keys: impl Iterator<Item = &'a Key>, scope: &str) -> io::Result<()> {
+    let mut occupied = HashSet::new();
+    for key in keys {
+        if !occupied.insert(*key) {
+            return Err(invalid(format!("duplicate key {key:?} in {scope}")));
+        }
+    }
+    Ok(())
+}
+
+// Crossterm reports Shift+Tab as BackTab; normalize both configuration and events.
+fn key_chord(code: KeyCode, modifiers: KeyModifiers) -> Key {
+    match code {
+        KeyCode::Tab if modifiers.contains(KeyModifiers::SHIFT) => (KeyCode::BackTab, modifiers),
+        KeyCode::BackTab => (code, modifiers | KeyModifiers::SHIFT),
+        _ => (code, modifiers),
+    }
+}
+
+fn parse_key(label: &str) -> io::Result<Key> {
+    let mut parts = label.split('+');
+    let name = parts.next_back().unwrap_or_default();
     let mut modifiers = KeyModifiers::NONE;
-    for modifier in &parts[..parts.len() - 1] {
+    for modifier in parts {
         modifiers |= match modifier.to_ascii_lowercase().as_str() {
             "ctrl" => KeyModifiers::CONTROL,
             "alt" => KeyModifiers::ALT,
@@ -261,7 +244,6 @@ fn parse_key(label: &str) -> io::Result<(KeyCode, KeyModifiers)> {
             _ => return Err(invalid(format!("invalid modifier in key: {label:?}"))),
         };
     }
-    let name = parts[parts.len() - 1];
     let code = match name.to_ascii_lowercase().as_str() {
         "up" => KeyCode::Up,
         "down" => KeyCode::Down,
@@ -271,6 +253,7 @@ fn parse_key(label: &str) -> io::Result<(KeyCode, KeyModifiers)> {
         "esc" => KeyCode::Esc,
         "space" => KeyCode::Char(' '),
         "tab" => KeyCode::Tab,
+        "backtab" => KeyCode::BackTab,
         "backspace" => KeyCode::Backspace,
         "delete" => KeyCode::Delete,
         "home" => KeyCode::Home,
@@ -293,7 +276,7 @@ fn parse_key(label: &str) -> io::Result<(KeyCode, KeyModifiers)> {
         }
         _ => return Err(invalid(format!("invalid key: {label:?}"))),
     };
-    Ok((code, modifiers))
+    Ok(key_chord(code, modifiers))
 }
 
 #[cfg(test)]
@@ -372,7 +355,7 @@ mod tests {
         );
         assert_eq!(
             bindings.preview_command(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            Some(PreviewCommand::Quit)
+            None
         );
         assert!(bindings.preview_help().contains("f: regenerate"));
         assert!(
@@ -396,5 +379,31 @@ mod tests {
         ] {
             assert!(Keybinds::parse(&source).is_err());
         }
+    }
+
+    #[test]
+    fn shift_tab_matches_backtab_events_and_detects_alias_conflicts() {
+        let source = CONFIG.replace("move_up = [\"up\", \"w\"]", "move_up = [\"shift+tab\"]");
+        let bindings = Keybinds::parse(&source).unwrap();
+        for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+            assert!(matches!(
+                bindings.action(
+                    &Screen::MainMenu,
+                    KeyEvent::new(KeyCode::BackTab, modifiers)
+                ),
+                Some(Action::MoveUp)
+            ));
+        }
+        assert!(
+            Keybinds::parse(&source.replace("[\"shift+tab\"]", "[\"shift+tab\", \"backtab\"]"))
+                .is_err()
+        );
+        assert!(matches!(
+            bindings.action(
+                &Screen::MainMenu,
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            ),
+            Some(Action::Quit)
+        ));
     }
 }

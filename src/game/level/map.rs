@@ -39,8 +39,8 @@ pub struct Tile {
 
 /// 2D grid of tiles.
 pub struct Map {
-    pub width: usize,
-    pub height: usize,
+    width: usize,
+    height: usize,
     tiles: Vec<Tile>,
 }
 
@@ -54,8 +54,36 @@ impl Map {
         Self {
             width,
             height,
-            tiles: vec![wall; width * height],
+            tiles: vec![wall; width.checked_mul(height).expect("map dimensions overflow")],
         }
+    }
+
+    /// Returns the number of columns; dimensions cannot change after allocation.
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Returns the number of rows.
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    /// Visits every stored position in row order, including walls and obstacles.
+    pub fn positions(&self) -> impl Iterator<Item = Position> + '_ {
+        (0..self.tiles.len()).map(|index| Position::new(index % self.width, index / self.width))
+    }
+
+    /// Returns in-bounds cardinal neighbors without overflowing grid coordinates.
+    pub fn neighbors(&self, pos: Position) -> impl Iterator<Item = Position> + '_ {
+        let valid = self.in_bounds(pos);
+        [
+            (valid && pos.x > 0).then(|| Position::new(pos.x - 1, pos.y)),
+            (valid && pos.y > 0).then(|| Position::new(pos.x, pos.y - 1)),
+            (valid && pos.x + 1 < self.width).then(|| Position::new(pos.x + 1, pos.y)),
+            (valid && pos.y + 1 < self.height).then(|| Position::new(pos.x, pos.y + 1)),
+        ]
+        .into_iter()
+        .flatten()
     }
 
     /// Whether (x,y) lies inside the map.
@@ -85,7 +113,7 @@ impl Map {
         self.get(pos).is_some_and(|tile| tile.kind.is_walkable())
     }
 
-    /// serialize Position into a single
+    /// Converts a validated position into its row-major storage index.
     fn index(&self, pos: Position) -> usize {
         pos.y * self.width + pos.x
     }
@@ -123,5 +151,30 @@ mod tests {
         map.set(outside, TileType::Floor);
         assert!(map.get(outside).is_none());
         assert!(!map.is_walkable(outside));
+    }
+
+    #[test]
+    fn positions_and_neighbors_handle_empty_maps_edges_and_extreme_coordinates() {
+        for map in [Map::new(0, 0), Map::new(0, 5), Map::new(5, 0)] {
+            assert_eq!(map.positions().count(), 0);
+            assert_eq!(map.neighbors(Position::new(0, 0)).count(), 0);
+        }
+        let map = Map::new(3, 2);
+        assert_eq!((map.width(), map.height()), (3, 2));
+        assert_eq!(map.positions().last(), Some(Position::new(2, 1)));
+        assert_eq!(
+            map.neighbors(Position::new(0, 0)).collect::<Vec<_>>(),
+            [Position::new(1, 0), Position::new(0, 1)]
+        );
+        assert_eq!(
+            map.neighbors(Position::new(usize::MAX, usize::MAX)).count(),
+            0
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "map dimensions overflow")]
+    fn overflowing_dimensions_are_rejected_before_allocation() {
+        Map::new(usize::MAX, 2);
     }
 }

@@ -20,22 +20,25 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
     let [body, help] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
     frame.render_widget(Paragraph::new(view.help).style(theme.muted), help);
-    let (map_area, status_area, log_area) = if body.width >= 90 && body.height >= 12 {
+    // Reserve the bottom log first; collapse status before losing useful map space.
+    let (content, log_area) = if body.height >= 7 {
+        let log_height = if body.height >= 16 { 5 } else { 3 };
         let [content, log] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(5)]).areas(body);
+            Layout::vertical([Constraint::Min(3), Constraint::Length(log_height)]).areas(body);
+        (content, log)
+    } else {
+        (body, Rect::default())
+    };
+    let (map_area, status_area) = if content.width >= 90 && content.height >= 7 {
         let [map, status] =
             Layout::horizontal([Constraint::Min(1), Constraint::Length(28)]).areas(content);
-        (map, status, log)
-    } else if body.height >= 16 {
-        let [map, status, log] = Layout::vertical([
-            Constraint::Min(3),
-            Constraint::Length(5),
-            Constraint::Length(5),
-        ])
-        .areas(body);
-        (map, status, log)
+        (map, status)
+    } else if content.height >= 10 {
+        let [map, status] =
+            Layout::vertical([Constraint::Min(3), Constraint::Length(5)]).areas(content);
+        (map, status)
     } else {
-        (body, Rect::default(), Rect::default())
+        (content, Rect::default())
     };
     if let Some(level) = &view.level {
         draw_level(frame, map_area, level, theme);
@@ -65,57 +68,38 @@ pub fn draw_level(frame: &mut Frame, area: Rect, level: &LevelView<'_>, theme: &
     let origin_x = focus
         .x
         .saturating_sub(usize::from(inner.width) / 2)
-        .min(level.map.width.saturating_sub(usize::from(inner.width)));
+        .min(level.map.width().saturating_sub(usize::from(inner.width)));
     let origin_y = focus
         .y
         .saturating_sub(usize::from(inner.height) / 2)
-        .min(level.map.height.saturating_sub(usize::from(inner.height)));
-    for dy in 0..inner.height {
-        for dx in 0..inner.width {
-            let pos = Position::new(origin_x + usize::from(dx), origin_y + usize::from(dy));
+        .min(level.map.height().saturating_sub(usize::from(inner.height)));
+    for dy in 0..usize::from(inner.height).min(level.map.height()) {
+        for dx in 0..usize::from(inner.width).min(level.map.width()) {
+            let pos = Position::new(origin_x + dx, origin_y + dy);
             if let Some(tile) = level.map.get(pos) {
-                paint(frame, inner.x + dx, inner.y + dy, theme.tile(tile.kind));
+                paint(
+                    frame,
+                    inner.x + dx as u16,
+                    inner.y + dy as u16,
+                    theme.tile(tile.kind),
+                );
             }
         }
     }
+    let mut draw_entity = |pos: Position, glyph| {
+        if level.map.in_bounds(pos)
+            && let (Some(x), Some(y)) = (pos.x.checked_sub(origin_x), pos.y.checked_sub(origin_y))
+            && x < usize::from(inner.width)
+            && y < usize::from(inner.height)
+        {
+            paint(frame, inner.x + x as u16, inner.y + y as u16, glyph);
+        }
+    };
     for entity in level.items.iter().chain(level.enemies) {
-        draw_entity(
-            frame,
-            inner,
-            (origin_x, origin_y),
-            level,
-            entity.position,
-            entity.glyph,
-        );
+        draw_entity(entity.position, entity.glyph);
     }
     if let Some(position) = level.player {
-        draw_entity(
-            frame,
-            inner,
-            (origin_x, origin_y),
-            level,
-            position,
-            theme.player,
-        );
-    }
-}
-
-fn draw_entity(
-    frame: &mut Frame,
-    area: Rect,
-    origin: (usize, usize),
-    level: &LevelView<'_>,
-    pos: Position,
-    glyph: Glyph,
-) {
-    if !level.map.in_bounds(pos) {
-        return;
-    }
-    if let (Some(x), Some(y)) = (pos.x.checked_sub(origin.0), pos.y.checked_sub(origin.1))
-        && x < usize::from(area.width)
-        && y < usize::from(area.height)
-    {
-        paint(frame, area.x + x as u16, area.y + y as u16, glyph);
+        draw_entity(position, theme.player);
     }
 }
 
@@ -165,18 +149,22 @@ pub fn draw_status(frame: &mut Frame, area: Rect, status: &StatusView<'_>, theme
     );
 }
 
-/// Draws the newest messages in chronological order, clipped to the panel height.
+/// Draws the newest message lines in chronological order, bounded by panel height.
 pub fn draw_messages(frame: &mut Frame, area: Rect, messages: &[&str], theme: &Theme) {
     let block = panel(" Message log ", theme);
     let height = usize::from(block.inner(area).height);
     let lines: Vec<Line<'_>> = if messages.is_empty() {
         vec![Line::from("No messages yet.")]
     } else {
-        messages
+        let mut lines: Vec<_> = messages
             .iter()
-            .skip(messages.len().saturating_sub(height))
-            .map(|message| Line::from(*message))
-            .collect()
+            .rev()
+            .flat_map(|message| message.lines().rev())
+            .take(height)
+            .map(Line::from)
+            .collect();
+        lines.reverse();
+        lines
     };
     frame.render_widget(Paragraph::new(lines).style(theme.text).block(block), area);
 }
@@ -266,5 +254,17 @@ mod tests {
         let output = text(&draw_screen(100, 24, Screen::Playing, &view));
         assert!(!output.contains("message 00"));
         assert!(output.find("message 28").unwrap() < output.find("message 29").unwrap());
+    }
+
+    #[test]
+    fn short_terminals_keep_the_latest_multiline_message_at_the_bottom() {
+        let view = RenderView {
+            messages: &["old message", "first line\nlatest line"],
+            ..Default::default()
+        };
+        let output = text(&draw_screen(60, 12, Screen::Playing, &view));
+        assert!(output.contains("Message log"));
+        assert!(output.contains("latest line"));
+        assert!(!output.contains("first line") && !output.contains("old message"));
     }
 }
