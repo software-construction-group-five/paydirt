@@ -26,7 +26,7 @@ pub enum EnemyType {
     Ghost,
     Slime,
 }
-
+#[derive(Debug)]
 pub enum AiState {
     Attacking, 
     Fleeing,
@@ -95,7 +95,20 @@ impl Enemy{
 }
 
 //Test Suggestions
-
-//Test that get_roll returns the attack value from stats
-
-//Test that update_status changes ai to fleeing when actual hp below flee_below_hp
+#[cfg(test)]
+mod tests {
+    use super::{Enemy, EnemyType, AiState};
+    //Test that get_roll returns the attack value from stats
+    #[test]
+    fn get_roll_returns_correct_attack() {
+        let a = Enemy::new(EnemyType::Goblin, Position::new(4,3));
+        assert_eq!(a.get_roll(), 3);
+    }
+    //Test that update_status changes ai Attacking 
+    #[test]
+    fn update_status_changes_to_attacking() {
+        let a = Enemy::new(EnemyType::Goblin, Position::new(4,3));
+        a.update_status();
+        assert_eq!(a.ai(), AiState::Attacking);
+    }
+}
