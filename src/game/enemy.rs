@@ -43,12 +43,29 @@ pub enum AiState {
 impl Enemy{
     //Creates Enemy
 
-    pub fn new(kind:EnemyType, position:position::Position, stats: stats::Stats) -> Enemy{
-        Enemy{
-            kind,
-            position,
-            stats,
-            ai=Idle,
+    pub fn new(kind:EnemyType, position:position::Position) -> Enemy{
+        match kind {
+                EnemyType::Goblin => Enemy{
+                    kind,
+                    position,
+                    stats : stats::Stats::new(25, 3, 5),
+                    ai:AiState::Idle,
+                    flee_below_hp: 10,
+                },
+                EnemyType::Ghost => Enemy{
+                    kind,
+                    position,
+                    stats : stats::Stats::new(10, 2, 3),
+                    ai:AiState::Idle,
+                    flee_below_hp: 5,
+                },
+                EnemyType::Slime => Enemy{
+                    kind,
+                    position,
+                    stats : stats::Stats::new(5, 1, 2),
+                    ai:AiState::Idle,
+                    flee_below_hp: 0,//slimes are too dumb to run
+                },
         }
     }
 
