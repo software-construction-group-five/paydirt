@@ -38,17 +38,18 @@ pub enum AiState {
     Idle,
 }
 
-pub fn build_enemy(kind:EnemyType, position:position::Position, stats: stats::Stats, ai: AiState) -> Enemy{
-    Enemy{
-        kind,
-        position,
-        stats,
-        ai,
-    }
-}
 
 impl Enemy{
     //Creates Enemy
+
+    pub fn new(kind:EnemyType, position:position::Position, stats: stats::Stats, ai: AiState) -> Enemy{
+        Enemy{
+            kind,
+            position,
+            stats,
+            ai,
+        }
+    }
 
     // - 12 Get Current Enemy State: position, AI state, health
     // returns enemyID as currently the file structure does not allow for returning the enemy (Contract 12, Protocol 1)
