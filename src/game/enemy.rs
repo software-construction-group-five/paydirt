@@ -6,9 +6,6 @@
 //! - 14 Combat Information: attack roll
 //!
 //! Decision-making lives in `ai`; Game applies the results.
-mod enemy{
-    pub mod ai;
-}
 mod position;
 mod stats;
 
@@ -25,7 +22,7 @@ pub struct Enemy {
     kind: EnemyType,
     position: position::Position,
     stats: stats::Stats,
-    ai: enemy::ai::AiState,
+    ai: AiState,
 }
 
 /// Enemy species. Each maps to an AiProfile that drives divergent behavior.
@@ -34,6 +31,12 @@ pub enum EnemyType {
     Goblin,
     Ghost,
     Slime,
+}
+
+pub enum AiState {
+    Attacking, 
+    Fleeing,
+    Idle,
 }
 
 impl Enemy{
