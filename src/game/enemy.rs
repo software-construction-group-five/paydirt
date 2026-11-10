@@ -22,6 +22,7 @@ pub struct Enemy {
     position: position::Position,
     stats: stats::Stats,
     ai: AiState,
+    flee_below_hp: i32,
 }
 
 /// Enemy species. Each maps to an AiProfile that drives divergent behavior.
@@ -42,12 +43,12 @@ pub enum AiState {
 impl Enemy{
     //Creates Enemy
 
-    pub fn new(kind:EnemyType, position:position::Position, stats: stats::Stats, ai: AiState) -> Enemy{
+    pub fn new(kind:EnemyType, position:position::Position, stats: stats::Stats) -> Enemy{
         Enemy{
             kind,
             position,
             stats,
-            ai,
+            ai=Idle,
         }
     }
 
