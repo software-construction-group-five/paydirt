@@ -69,11 +69,13 @@ impl Enemy{
         }
     }
 
-    // - 12 Get Current Enemy State: position, AI state, health
-    // returns enemyID as currently the file structure does not allow for returning the enemy (Contract 12, Protocol 1)
-    pub fn get_enemy(self, _enemyID: i32) -> Enemy {//underscore because enemyID is currently unsused
-        self
-    }
+    // - 12 Get Current Enemy State: kind, position, stats, AI state
+    //(Contract 12, Protocol 1)
+    pub fn kind(&self) -> &EnemyType { &self.kind }
+    pub fn position(&self) -> &position::Position { &self.position }
+    pub fn stats(&self) -> &stats::Stats { &self.stats }
+    pub fn ai(&self) -> &AiState { &self.ai}
+
 
     // - 13 Enemy Update: update position and AI state
     //(Contract 13, Protocol 1)
