@@ -22,6 +22,8 @@ pub struct Theme {
 struct TileGlyphs {
     wall: char,
     floor: char,
+    rock: char,
+    water: char,
     door_open: char,
     door_closed: char,
     stairs_down: char,
@@ -38,6 +40,8 @@ impl Theme {
     pub fn tile(&self, kind: TileType) -> char {
         match kind {
             TileType::Wall => self.tiles.wall,
+            TileType::Rock => self.tiles.rock,
+            TileType::Water => self.tiles.water,
             TileType::Floor => self.tiles.floor,
             TileType::Door { open: true } => self.tiles.door_open,
             TileType::Door { open: false } => self.tiles.door_closed,

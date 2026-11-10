@@ -35,18 +35,18 @@ fn run(terminal: &mut DefaultTerminal, renderer: Renderer) -> std::io::Result<()
     // TODO: move into Game once it owns the RNG.
     let mut rng = rand::rng();
     let mut depth = 0;
-    let mut map = LevelGenerator::generate_map(depth, &mut rng);
+    let mut level = LevelGenerator::generate_level(depth, &mut rng);
 
     loop {
-        terminal.draw(|frame| renderer.render(frame, &map, depth))?;
+        terminal.draw(|frame| renderer.render(frame, level.get_map(), level.depth() as usize))?;
 
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
                 KeyCode::Char('q') => return Ok(()),
-                KeyCode::Char('r') => map = LevelGenerator::generate_map(depth, &mut rng),
+                KeyCode::Char('r') => level = LevelGenerator::generate_level(depth, &mut rng),
                 KeyCode::Char('>') => {
                     depth += 1;
-                    map = LevelGenerator::generate_map(depth, &mut rng);
+                    level = LevelGenerator::generate_level(depth, &mut rng);
                 }
                 _ => {}
             },

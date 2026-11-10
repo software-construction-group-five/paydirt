@@ -8,8 +8,14 @@ use crate::game::position::Position;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TileType {
     Wall,
+    /// Impassable boulder placed inside a room.
+    Rock,
+    /// Impassable water filling part of a room.
+    Water,
     Floor,
-    Door { open: bool },
+    Door {
+        open: bool,
+    },
     StairsDown,
 }
 
@@ -17,7 +23,7 @@ impl TileType {
     /// Whether players and enemies can be on this type of tile.
     pub fn is_walkable(self) -> bool {
         match self {
-            TileType::Wall => false,
+            TileType::Wall | TileType::Rock | TileType::Water => false,
             TileType::Door { open } => open,
             TileType::Floor | TileType::StairsDown => true,
         }

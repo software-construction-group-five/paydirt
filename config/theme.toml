@@ -2,6 +2,8 @@
 [tiles]
 wall = "#"
 floor = "."
+rock = "O"
+water = "~"
 door_open = "'"
 door_closed = "+"
 stairs_down = ">"
