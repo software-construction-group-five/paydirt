@@ -1,10 +1,9 @@
 //! Menu-driven launcher using Game state and the TUI rendering/input APIs.
 //!
-//! Game owns navigation and level generation; the launcher owns terminal events.
+//! Game owns navigation and level generation. The launcher forwards TUI actions.
 
 use std::{io, path::Path};
 
-use crossterm::event::{self, Event};
 use paydirt::{
     game::Game,
     tui::{LevelView, RenderView, Renderer, input::Keybinds, theme::Theme},
@@ -51,9 +50,7 @@ fn run(terminal: &mut DefaultTerminal, renderer: &Renderer, keybinds: &Keybinds)
             ..Default::default()
         };
         terminal.draw(|frame| renderer.render(frame, game.screen(), &view))?;
-        if let Event::Key(key) = event::read()?
-            && let Some(action) = keybinds.action(game.screen(), key)
-        {
+        if let Some(action) = keybinds.read_input(game.screen())? {
             game.process_action(action);
         }
     }

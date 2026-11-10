@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::game::{action::Action, screen::Screen};
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use serde::Deserialize;
 
 type Key = (KeyCode, KeyModifiers);
@@ -73,6 +73,18 @@ impl Keybinds {
             )?;
         }
         Ok(Self { global, screens })
+    }
+
+    /// Reads the next terminal event and maps a key press for the active screen
+    /// to an action (contract 21).
+    ///
+    /// Call after terminal setup. Unmapped keys and other events return `None`;
+    /// terminal read failures are returned to the caller.
+    pub fn read_input(&self, screen: &Screen) -> io::Result<Option<&Action>> {
+        match event::read()? {
+            Event::Key(key) => Ok(self.action(screen, key)),
+            _ => Ok(None),
+        }
     }
 
     /// Interprets a key press for the active screen; unmapped/released keys are ignored.
