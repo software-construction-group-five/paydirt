@@ -8,12 +8,6 @@
 //! Decision-making lives in `ai`; Game applies the results.
 mod position;
 mod stats;
-
-
-//use enemy::ai::{AiState, AiProfile, Intent};
-// pub mod stats::Stats;
-// pub mod position::Position;
-// pub mod ai::AiState;
     
 /// A single enemy instance in a Level.
 pub struct Enemy {
@@ -70,7 +64,7 @@ impl Enemy{
     }
 
     // - 12 Get Current Enemy State: kind, position, stats, AI state
-    //(Contract 12, Protocol 1)
+    //(Contract 12, Protocol 1-4)
     pub fn kind(&self) -> &EnemyType { &self.kind }
     pub fn position(&self) -> &position::Position { &self.position }
     pub fn stats(&self) -> &stats::Stats { &self.stats }
@@ -104,4 +98,4 @@ impl Enemy{
 
 //Test that get_roll returns the attack value from stats
 
-//Test that get_enemy returns the correct enemy
+//Test that update_status changes ai to fleeing when actual hp below flee_below_hp
