@@ -2,6 +2,28 @@
 
 A terminal roguelike about Paydirt Pete's daring escape from the mine
 
+## Theme configuration
+
+Characters and foreground colors are defined in `config/theme.toml`. The TUI
+provides `Theme::load(path)` to read it. Backgrounds always use the terminal
+default. Rocks use dark gray and water uses blue.
+
+`cargo run` launches the generated-level preview using the full TUI. It displays
+the starting player marker, depth, and terrain; gameplay remains unimplemented.
+The preview loads both config files relative to the project root, so it can also
+be launched from another working directory.
+
+## Keybindings
+
+Edit `config/keybinds.toml` to change controls. Each action
+accepts a list of keys, with separate sections for each screen and a global
+section for bindings such as quit. For example, `move_right = ["right", "d"]`
+can be changed to `move_right = ["l"]`. Control hints use the configured keys.
+
+The `[preview]` section configures `regenerate` (default `r`) and `next_level`
+(default `>`). The preview also honors the global quit keys (`q` and `ctrl+c`).
+It does not implement movement, combat, or screen transitions.
+
 ## Level generation
 
 `LevelGenerator::generate_level(depth: u32, rng: &mut impl Rng) -> Level` returns
@@ -22,14 +44,30 @@ spawn plans. Spawn counts are provisional and depth-scaled with fixed caps.
 Player construction and level transitions remain the Game controller's job.
 
 Doors appear only at entrances where narrow hallways meet rooms, and always
-start closed. Closed doors block movement; Game must handle opening them. Circular rooms occasionally contain one or two impassable
-rocks (`O`, configurable as `tiles.rock` in `config/theme.toml`). Rocks preserve
+start closed. Closed doors block movement; Game must handle opening them.
+Circular rooms occasionally contain one or two impassable
+rocks (`O`, configured in `[tiles.rock]` in `config/theme.toml`). Rocks preserve
 room centers, the starting safe area, and connectivity when doors are opened.
 Some larger circular rooms (diameter at least nine tiles) contain rounded water
-blobs, rendered as `~` (`tiles.water`). Water is impassable. Entire pools are
+blobs, rendered as `~` (`[tiles.water]`). Water is impassable. Entire pools are
 rejected if they would seal a route or cover protected starting/entrance tiles.
 Rocks, water, and doors are excluded from enemy and item spawn locations.
 Stairs and entity spawn reservations are chosen after these decorations.
+
+## TUI integration
+
+The application loads `Theme` and `Keybinds` before setting up the terminal. Resolve
+both config paths relative to the project root rather than the working directory.
+Inside the application loop:
+
+- The game controller supplies the active `Screen` and a borrowed `RenderView`.
+- `Renderer::render(frame, screen, view)` draws without changing game state.
+- `Keybinds::action(screen, key_event)` translates input into an `Action`.
+- The game controller processes that action and provides updated display data.
+
+The TUI does not construct levels, move players, validate movement, advance turns,
+or decide screen transitions. Optional entity slices in `LevelView` provide
+rendering hooks for enemies and floor items as those systems are implemented.
 
 ## Paydirt Struct Hierarchy
 

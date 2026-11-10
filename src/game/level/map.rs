@@ -90,3 +90,38 @@ impl Map {
         pos.y * self.width + pos.x
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// TESTS
+////////////////////////////////////////////////////////////////////////////////
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_changes_walkability() {
+        let mut map = Map::new(5, 5);
+        let pos = Position::new(2, 2);
+        assert!(!map.is_walkable(pos), "new maps start as walls");
+
+        map.set(pos, TileType::Floor);
+        assert!(map.is_walkable(pos));
+
+        map.set(pos, TileType::Door { open: false });
+        assert!(!map.is_walkable(pos), "closed doors block movement");
+
+        map.set(pos, TileType::Door { open: true });
+        assert!(map.is_walkable(pos), "open doors allow movement");
+    }
+
+    #[test]
+    fn out_of_bounds_is_blocked_and_ignored() {
+        let mut map = Map::new(5, 5);
+        let outside = Position::new(5, 0);
+
+        map.set(outside, TileType::Floor);
+        assert!(map.get(outside).is_none());
+        assert!(!map.is_walkable(outside));
+    }
+}

@@ -1,1 +1,36 @@
-# Keybind Config
+# Action names map to lists of keys. Screen sections allow context-specific keys.
+# Named keys: up, down, left, right, enter, esc, space, tab, backspace,
+# delete, home, end, pageup, pagedown, plus. Modifiers: ctrl+, alt+, shift+.
+# Global keys apply everywhere and must not conflict with screen bindings.
+
+[global]
+quit = ["q", "ctrl+c"]
+
+[main_menu]
+move_up = ["up", "w"]
+move_down = ["down", "s"]
+confirm = ["enter"]
+
+[playing]
+move_up = ["up", "w"]
+move_down = ["down", "s"]
+move_left = ["left", "a"]
+move_right = ["right", "d"]
+open_inventory = ["i"]
+pause = ["esc"]
+
+[inventory]
+back = ["esc", "i"]
+
+[paused]
+pause = ["esc"]
+confirm = ["enter"]
+back = ["m"]
+
+[game_over]
+confirm = ["enter"]
+
+# Generated-level viewer controls; these do not process gameplay actions.
+[preview]
+regenerate = ["r"]
+next_level = [">"]

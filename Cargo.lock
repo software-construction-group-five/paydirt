@@ -825,6 +825,7 @@ dependencies = [
 name = "paydirt"
 version = "0.1.0"
 dependencies = [
+ "crossterm",
  "rand 0.10.3",
  "ratatui",
  "serde",
