@@ -63,8 +63,8 @@ impl Enemy{
 
     // - 14 Combat Information: attack roll
     //(Contract 14, Protocol 1)
-    pub fn get_roll(&self){
-        self.stats.attack();
+    pub fn get_roll(&self) -> i32{
+        self.stats.attack()
     }
 }
 
