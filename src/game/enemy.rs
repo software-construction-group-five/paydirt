@@ -6,15 +6,15 @@
 //! - 14 Combat Information: attack roll
 //!
 //! Decision-making lives in `ai`; Game applies the results.
-mod position;
-mod stats;
+use crate::game::position::Position;
+use crate::game::stats::{Stats, StatusEffect};
     
 /// A single enemy instance in a Level.
 pub struct Enemy {
     // TODO: id: usize, kind: EnemyType, position: Position, stats: Stats, ai: AiState
     kind: EnemyType,
-    position: position::Position,
-    stats: stats::Stats,
+    position: Position,
+    stats: Stats,
     ai: AiState,
     flee_below_hp: i32,
 }
@@ -37,26 +37,26 @@ pub enum AiState {
 impl Enemy{
     //Creates Enemy
 
-    pub fn new(kind:EnemyType, position:position::Position) -> Enemy{
+    pub fn new(kind:EnemyType, position:Position) -> Enemy{
         match kind {
                 EnemyType::Goblin => Enemy{
                     kind,
                     position,
-                    stats : stats::Stats::new(25, 3, 5),
+                    stats : Stats::new(25, 3, 5),
                     ai:AiState::Idle,
                     flee_below_hp: 10,
                 },
                 EnemyType::Ghost => Enemy{
                     kind,
                     position,
-                    stats : stats::Stats::new(10, 2, 3),
+                    stats : Stats::new(10, 2, 3),
                     ai:AiState::Idle,
                     flee_below_hp: 5,
                 },
                 EnemyType::Slime => Enemy{
                     kind,
                     position,
-                    stats : stats::Stats::new(5, 1, 2),
+                    stats : Stats::new(5, 1, 2),
                     ai:AiState::Idle,
                     flee_below_hp: 0,//slimes are too dumb to run
                 },
@@ -66,14 +66,14 @@ impl Enemy{
     // - 12 Get Current Enemy State: kind, position, stats, AI state
     //(Contract 12, Protocol 1-4)
     pub fn kind(&self) -> &EnemyType { &self.kind }
-    pub fn position(&self) -> &position::Position { &self.position }
-    pub fn stats(&self) -> &stats::Stats { &self.stats }
+    pub fn position(&self) -> &Position { &self.position }
+    pub fn stats(&self) -> &Stats { &self.stats }
     pub fn ai(&self) -> &AiState { &self.ai}
 
 
     // - 13 Enemy Update: update position and AI state
     //(Contract 13, Protocol 1)
-    pub fn update_position(&mut self, newPosition: position::Position){
+    pub fn update_position(&mut self, newPosition: Position){
         self.position = newPosition;
     }
 
