@@ -18,7 +18,6 @@ mod stats;
 /// A single enemy instance in a Level.
 pub struct Enemy {
     // TODO: id: usize, kind: EnemyType, position: Position, stats: Stats, ai: AiState
-    id: i32,
     kind: EnemyType,
     position: position::Position,
     stats: stats::Stats,
@@ -37,6 +36,15 @@ pub enum AiState {
     Attacking, 
     Fleeing,
     Idle,
+}
+
+pub fn build_enemy(kind:EnemyType, position:position::Position, stats: stats::Stats, ai: AiState) -> Enemy{
+    Enemy{
+        kind,
+        position,
+        stats,
+        ai,
+    }
 }
 
 impl Enemy{
