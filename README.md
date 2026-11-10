@@ -8,8 +8,12 @@ Characters and foreground colors are defined in `config/theme.toml`. The TUI
 provides `Theme::load(path)` to read it. Backgrounds always use the terminal
 default. Rocks use dark gray and water uses blue.
 
-`cargo run` launches the generated-level preview using the full TUI. It displays
-the starting player marker, depth, and terrain; gameplay remains unimplemented.
+`cargo run` opens the main menu with Pete and the ASCII title. Select New Game
+to generate a level, or Quit to exit. In the level view, `i` opens inventory and
+`Esc` pauses. Inventory is empty until item handling is integrated. `Esc`/Enter
+resumes from pause; `m` returns to the main menu. Controls are configurable.
+The level view displays the starting player marker, depth, and terrain; movement
+and combat remain unimplemented.
 The preview loads both config files relative to the project root, so it can also
 be launched from another working directory.
 
@@ -22,7 +26,7 @@ can be changed to `move_right = ["l"]`. Control hints use the configured keys.
 
 The `[preview]` section configures `regenerate` (default `r`) and `next_level`
 (default `>`). The preview also honors the global quit keys (`q` and `ctrl+c`).
-It does not implement movement, combat, or screen transitions.
+Preview commands are active only in the level view, not in menus or inventory.
 
 ## Level generation
 

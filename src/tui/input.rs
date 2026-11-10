@@ -98,6 +98,7 @@ impl Keybinds {
         let mut preview = Vec::new();
         let mut occupied: HashSet<_> = global
             .iter()
+            .chain(&screens[1])
             .flat_map(|binding| binding.keys.iter().copied())
             .collect();
         for (name, labels) in config.preview {
@@ -176,6 +177,15 @@ impl Keybinds {
                 format!("{}: {label}", binding.labels.join("/"))
             })
             .collect();
+        for binding in &self.screens[1] {
+            if matches!(binding.action, Action::OpenInventory | Action::Pause) {
+                hints.push(format!(
+                    "{}: {}",
+                    binding.labels.join("/"),
+                    binding.description
+                ));
+            }
+        }
         for binding in &self.global {
             if matches!(binding.action, Action::Quit) {
                 hints.push(format!("{}: quit", binding.labels.join("/")));
