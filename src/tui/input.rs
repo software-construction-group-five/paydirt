@@ -12,27 +12,16 @@ use serde::Deserialize;
 
 type Key = (KeyCode, KeyModifiers);
 
-// Share parsing and preformatted hints between gameplay and preview bindings.
-struct Binding<T> {
-    action: T,
+struct Binding {
+    action: Action,
     keys: Vec<Key>,
     hint: String,
 }
 
-/// Commands supported only by the generated-level viewer, outside gameplay.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PreviewCommand {
-    /// Generate a new layout at the current depth.
-    Regenerate,
-    /// Preview the next dungeon depth.
-    NextLevel,
-}
-
 /// Global bindings and screen-specific action mappings.
 pub struct Keybinds {
-    global: Vec<Binding<Action>>,
-    screens: [Vec<Binding<Action>>; 5],
-    preview: Vec<Binding<PreviewCommand>>,
+    global: Vec<Binding>,
+    screens: [Vec<Binding>; 5],
 }
 
 #[derive(Deserialize)]
@@ -44,8 +33,6 @@ struct Config {
     inventory: BTreeMap<String, Vec<String>>,
     paused: BTreeMap<String, Vec<String>>,
     game_over: BTreeMap<String, Vec<String>>,
-    #[serde(default)]
-    preview: BTreeMap<String, Vec<String>>,
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -85,28 +72,7 @@ impl Keybinds {
                 &format!("screen {index}"),
             )?;
         }
-        let mut preview = Vec::new();
-        for (name, labels) in config.preview {
-            let (command, description) = match name.as_str() {
-                "regenerate" => (PreviewCommand::Regenerate, "regenerate"),
-                "next_level" => (PreviewCommand::NextLevel, "deeper"),
-                _ => return Err(invalid(format!("unknown preview command: {name}"))),
-            };
-            preview.push(binding(command, description, labels)?);
-        }
-        check_keys(
-            global
-                .iter()
-                .chain(&screens[1])
-                .flat_map(|binding| &binding.keys)
-                .chain(preview.iter().flat_map(|binding| &binding.keys)),
-            "preview",
-        )?;
-        Ok(Self {
-            global,
-            screens,
-            preview,
-        })
+        Ok(Self { global, screens })
     }
 
     /// Interprets a key press for the active screen; unmapped/released keys are ignored.
@@ -119,39 +85,6 @@ impl Keybinds {
             .chain(&self.screens[screen_index(screen)])
             .find(|binding| binding.keys.contains(&key_chord(key.code, key.modifiers)))
             .map(|binding| &binding.action)
-    }
-
-    /// Interprets viewer input without assigning gameplay meaning to preview commands.
-    pub fn preview_command(&self, key: KeyEvent) -> Option<PreviewCommand> {
-        if key.kind != KeyEventKind::Press {
-            return None;
-        }
-        let key = key_chord(key.code, key.modifiers);
-        self.preview
-            .iter()
-            .find(|binding| binding.keys.contains(&key))
-            .map(|binding| binding.action)
-    }
-
-    /// Builds viewer hints from its configured commands and global quit keys.
-    pub fn preview_help(&self) -> String {
-        self.preview
-            .iter()
-            .map(|binding| binding.hint.as_str())
-            .chain(
-                self.screens[1]
-                    .iter()
-                    .chain(&self.global)
-                    .filter(|binding| {
-                        matches!(
-                            binding.action,
-                            Action::OpenInventory | Action::Pause | Action::Quit
-                        )
-                    })
-                    .map(|binding| binding.hint.as_str()),
-            )
-            .collect::<Vec<_>>()
-            .join("  ")
     }
 
     /// Builds control hints from the same mappings used to interpret input.
@@ -175,18 +108,13 @@ fn screen_index(screen: &Screen) -> usize {
     }
 }
 
-fn bindings(table: BTreeMap<String, Vec<String>>) -> io::Result<Vec<Binding<Action>>> {
+fn bindings(table: BTreeMap<String, Vec<String>>) -> io::Result<Vec<Binding>> {
     table
         .into_iter()
         .map(|(name, labels)| {
             let (action, description) = match name.as_str() {
                 "move_up" => (Action::MoveUp, "up"),
                 "move_down" => (Action::MoveDown, "down"),
-                "move_left" => (Action::MoveLeft, "left"),
-                "move_right" => (Action::MoveRight, "right"),
-                "wait" => (Action::Wait, "wait"),
-                "pick_up" => (Action::PickUp, "pick up"),
-                "open_inventory" => (Action::OpenInventory, "inventory"),
                 "pause" => (Action::Pause, "pause/resume"),
                 "confirm" => (Action::Confirm, "confirm"),
                 "back" => (Action::Back, "back"),
@@ -198,7 +126,7 @@ fn bindings(table: BTreeMap<String, Vec<String>>) -> io::Result<Vec<Binding<Acti
         .collect()
 }
 
-fn binding<T>(action: T, description: &str, labels: Vec<String>) -> io::Result<Binding<T>> {
+fn binding(action: Action, description: &str, labels: Vec<String>) -> io::Result<Binding> {
     if labels.is_empty() {
         return Err(invalid(format!("{description} needs at least one key")));
     }
@@ -223,11 +151,12 @@ fn check_keys<'a>(keys: impl Iterator<Item = &'a Key>, scope: &str) -> io::Resul
     Ok(())
 }
 
-// Crossterm reports Shift+Tab as BackTab; normalize both configuration and events.
+// Terminals differ in whether they report Shift for an already shifted character.
 fn key_chord(code: KeyCode, modifiers: KeyModifiers) -> Key {
     match code {
         KeyCode::Tab if modifiers.contains(KeyModifiers::SHIFT) => (KeyCode::BackTab, modifiers),
         KeyCode::BackTab => (code, modifiers | KeyModifiers::SHIFT),
+        KeyCode::Char('>') => (code, modifiers - KeyModifiers::SHIFT),
         _ => (code, modifiers),
     }
 }
@@ -286,24 +215,24 @@ mod tests {
 
     #[test]
     fn remapping_changes_actions_and_help_and_preserves_screen_context() {
-        let config = CONFIG.replace("[\"right\", \"d\"]", "[\"l\"]");
+        let config = CONFIG.replace("[\"up\", \"w\"]", "[\"l\"]");
         let bindings = Keybinds::parse(&config).unwrap();
         assert!(matches!(
             bindings.action(
-                &Screen::Playing,
+                &Screen::MainMenu,
                 KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)
             ),
-            Some(Action::MoveRight)
+            Some(Action::MoveUp)
         ));
         assert!(
             bindings
                 .action(
-                    &Screen::Playing,
-                    KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)
+                    &Screen::MainMenu,
+                    KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE)
                 )
                 .is_none()
         );
-        assert!(bindings.help(&Screen::Playing).contains("l: right"));
+        assert!(bindings.help(&Screen::MainMenu).contains("l: up"));
         assert!(matches!(
             bindings.action(
                 &Screen::Playing,
@@ -332,53 +261,27 @@ mod tests {
         for source in [
             CONFIG.replace("\"ctrl+c\"", "\"banana\""),
             CONFIG.replace("move_up =", "teleport ="),
-            CONFIG.replace("[\"right\", \"d\"]", "[\"q\"]"),
-            CONFIG.replace("[\"right\", \"d\"]", "[]"),
+            CONFIG.replace("[\"up\", \"w\"]", "[\"q\"]"),
+            CONFIG.replace("[\"up\", \"w\"]", "[]"),
         ] {
             assert!(Keybinds::parse(&source).is_err());
         }
     }
 
     #[test]
-    fn preview_commands_are_configurable_and_separate_from_game_actions() {
-        let source = CONFIG.replace("regenerate = [\"r\"]", "regenerate = [\"f\"]");
+    fn greater_than_matches_with_or_without_shift_and_detects_alias_conflicts() {
+        let source = CONFIG.replace("pause = [\"esc\"]", "pause = [\">\"]");
         let bindings = Keybinds::parse(&source).unwrap();
-        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
-        assert_eq!(
-            bindings.preview_command(key(KeyCode::Char('f'))),
-            Some(PreviewCommand::Regenerate)
-        );
-        assert_eq!(bindings.preview_command(key(KeyCode::Char('r'))), None);
-        assert_eq!(
-            bindings.preview_command(key(KeyCode::Char('>'))),
-            Some(PreviewCommand::NextLevel)
-        );
-        assert_eq!(
-            bindings.preview_command(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            None
-        );
-        assert!(bindings.preview_help().contains("f: regenerate"));
-        assert!(
-            bindings
-                .action(&Screen::Playing, key(KeyCode::Char('f')))
-                .is_none()
-        );
-        assert_eq!(bindings.preview_command(key(KeyCode::Char('w'))), None);
-        assert_eq!(
-            bindings.preview_command(KeyEvent::new_with_kind(
-                KeyCode::Char('f'),
-                KeyModifiers::NONE,
-                KeyEventKind::Release
-            )),
-            None
-        );
-        for source in [
-            CONFIG.replace("regenerate = [\"r\"]", "regenerate = [\"q\"]"),
-            CONFIG.replace("regenerate = [\"r\"]", "regenerate = [\">\"]"),
-            CONFIG.replace("regenerate =", "teleport ="),
-        ] {
-            assert!(Keybinds::parse(&source).is_err());
+        for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+            assert!(matches!(
+                bindings.action(
+                    &Screen::Playing,
+                    KeyEvent::new(KeyCode::Char('>'), modifiers)
+                ),
+                Some(Action::Pause)
+            ));
         }
+        assert!(Keybinds::parse(&source.replace("[\">\"]", "[\">\", \"shift+>\"]")).is_err());
     }
 
     #[test]

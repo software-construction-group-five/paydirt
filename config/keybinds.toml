@@ -12,11 +12,6 @@ move_down = ["down", "s"]
 confirm = ["enter"]
 
 [playing]
-move_up = ["up", "w"]
-move_down = ["down", "s"]
-move_left = ["left", "a"]
-move_right = ["right", "d"]
-open_inventory = ["i"]
 pause = ["esc"]
 
 [inventory]
@@ -29,8 +24,3 @@ back = ["m"]
 
 [game_over]
 confirm = ["enter"]
-
-# Generated-level viewer controls; these do not process gameplay actions.
-[preview]
-regenerate = ["r"]
-next_level = [">"]

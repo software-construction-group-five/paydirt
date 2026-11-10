@@ -1,13 +1,12 @@
 //! Procedural level construction (SDD 3.8).
 //!
-//! Contract 19 Generate Level: construct a Level for a given depth.
-//! Entity population is deferred while Enemy and Item remain scaffolding.
+//! Builds the terrain and navigation anchors for SDD contract 19.
 //! Stateless between calls; Game decides when a level is needed.
 
 use rand::{Rng, RngExt, seq::SliceRandom};
 
 use crate::game::level::{
-    Level, SpawnPlan,
+    Level,
     map::{Map, TileType},
 };
 use crate::game::position::Position;
@@ -26,19 +25,17 @@ const WATER_ROOM_CHANCE: f64 = 0.4;
 const WATER_MIN_DIAMETER: usize = 9;
 const WATER_PLACEMENT_ATTEMPTS: usize = 12;
 
-/// Builds dungeon floors and reserves placements for enemies and items.
+/// Builds dungeon floors.
 pub struct LevelGenerator;
 
 impl LevelGenerator {
-    /// Builds a connected level with a safe start, distant stairs, and spawn plans.
+    /// Builds a connected level with a safe start, and distant stairs.
     /// Game supplies the depth and RNG; generation retains no session state.
-    /// Entity collections remain empty until Enemy and Item constructors are merged.
     pub fn generate_level(depth: u32, rng: &mut impl Rng) -> Level {
         let (mut map, player_start) = generate_layout(depth, rng);
         let stairs_down = explore(&map, player_start).0;
         map.set(stairs_down, TileType::StairsDown);
-        let pending_spawns = plan_spawns(&map, depth, player_start, stairs_down, rng);
-        Level::new(map, depth, player_start, stairs_down, pending_spawns)
+        Level::new(map, depth, player_start, stairs_down)
     }
 }
 
@@ -281,33 +278,6 @@ fn add_rocks(map: &mut Map, rooms: &[Room], start: Position, rng: &mut impl Rng)
     }
 }
 
-/// Samples distinct floor cells without retries or dependence on entity catalogs.
-fn plan_spawns(
-    map: &Map,
-    depth: u32,
-    start: Position,
-    exit: Position,
-    rng: &mut impl Rng,
-) -> SpawnPlan {
-    let mut available: Vec<_> = map
-        .positions()
-        .filter(|&position| {
-            map.get(position).is_some_and(|tile| tile.kind == TileType::Floor)
-                // Keep a small safe area around Pete, including diagonal neighbors.
-                && position.x.abs_diff(start.x).max(position.y.abs_diff(start.y)) > 2
-                && position != exit
-        })
-        .collect();
-    available.shuffle(rng);
-    // TODO(team): tune population counts and select species/catalog items after merge.
-    // Cap depth scaling before conversion so even extreme depths stay bounded.
-    let enemy_count = (3 + depth.min(9) as usize).min(available.len());
-    let enemies = available.drain(..enemy_count).collect();
-    let item_count = (2 + depth.min(6) as usize / 2).min(available.len());
-    let items = available.drain(..item_count).collect();
-    SpawnPlan { enemies, items }
-}
-
 /// A room's dimension. Circular rooms fill a circle inside  a square box.
 struct Room {
     x: usize,
@@ -420,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_levels_preserve_navigation_and_spawn_invariants() {
+    fn generated_levels_preserve_navigation_invariants() {
         let (mut doors, mut rocks, mut water) = (0, 0, 0);
         for level in sample_levels() {
             let map = level.get_map();
@@ -495,22 +465,6 @@ mod tests {
             }
             assert_eq!(reached.len(), connected_tiles);
             assert!(reached.contains(&exit));
-            let plan = level.pending_spawns();
-            assert!(!plan.enemies.is_empty() && !plan.items.is_empty());
-            let mut occupied = std::collections::HashSet::from([start, exit]);
-            for &position in plan.enemies.iter().chain(&plan.items) {
-                assert!(occupied.insert(position));
-                assert!(reached.contains(&position));
-                assert_eq!(map.get(position).unwrap().kind, TileType::Floor);
-                assert!(
-                    position
-                        .x
-                        .abs_diff(start.x)
-                        .max(position.y.abs_diff(start.y))
-                        > 2
-                );
-            }
-            assert!(level.get_enemies().is_empty() && level.get_floor_items().is_empty());
         }
         assert!(doors > 0 && rocks > 0 && water > 0);
     }
@@ -525,7 +479,6 @@ mod tests {
             assert_eq!(first.depth(), depth);
             assert_eq!(first.player_start(), second.player_start());
             assert_eq!(first.stairs_down(), second.stairs_down());
-            assert_eq!(first.pending_spawns(), second.pending_spawns());
             for y in 0..MAP_HEIGHT {
                 for x in 0..MAP_WIDTH {
                     let position = Position::new(x, y);
@@ -626,29 +579,6 @@ mod tests {
                 assert_eq!(map.get(Position::new(16, 8)).unwrap().kind, TileType::Floor);
             }
             assert_eq!(seen.len(), entrances.len());
-        }
-    }
-
-    #[test]
-    fn spawn_planning_excludes_rocks_water_closed_doors_and_stairs() {
-        let mut map = Map::new(8, 8);
-        let start = Position::new(1, 1);
-        let exit = Position::new(6, 6);
-        let floors = [Position::new(5, 1), Position::new(5, 2)];
-        map.set(start, TileType::Floor);
-        map.set(exit, TileType::StairsDown);
-        map.set(Position::new(4, 1), TileType::Rock);
-        map.set(Position::new(4, 3), TileType::Water);
-        map.set(Position::new(4, 2), TileType::Door { open: false });
-        for position in floors {
-            map.set(position, TileType::Floor);
-        }
-        let plan = plan_spawns(&map, 10, start, exit, &mut StdRng::seed_from_u64(1));
-        let reserved: std::collections::HashSet<_> =
-            plan.enemies.iter().chain(&plan.items).copied().collect();
-        assert_eq!(reserved, std::collections::HashSet::from(floors));
-        for position in reserved {
-            assert!(map.is_walkable(position));
         }
     }
 

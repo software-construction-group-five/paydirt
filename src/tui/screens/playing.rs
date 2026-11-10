@@ -21,7 +21,7 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
     frame.render_widget(Paragraph::new(view.help).style(theme.muted), help);
     // Reserve the bottom log first; collapse status before losing useful map space.
-    let (content, log_area) = if body.height >= 7 {
+    let (content, log_area) = if !view.messages.is_empty() && body.height >= 7 {
         let log_height = if body.height >= 16 { 5 } else { 3 };
         let [content, log] =
             Layout::vertical([Constraint::Min(3), Constraint::Length(log_height)]).areas(body);
@@ -29,11 +29,14 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
     } else {
         (body, Rect::default())
     };
-    let (map_area, status_area) = if content.width >= 90 && content.height >= 7 {
+    let has_status = view.status.health.is_some()
+        || !view.status.effects.is_empty()
+        || !view.status.equipment.is_empty();
+    let (map_area, status_area) = if has_status && content.width >= 90 && content.height >= 7 {
         let [map, status] =
             Layout::horizontal([Constraint::Min(1), Constraint::Length(28)]).areas(content);
         (map, status)
-    } else if content.height >= 10 {
+    } else if has_status && content.height >= 10 {
         let [map, status] =
             Layout::vertical([Constraint::Min(3), Constraint::Length(5)]).areas(content);
         (map, status)

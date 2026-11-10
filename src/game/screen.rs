@@ -1,4 +1,4 @@
-//! Game screens and their per-screen state.
+//! Game screens.
 //!
 //! Game knows the active Screen (contract 3); Renderer reads it to decide what to draw.
 
@@ -9,19 +9,4 @@ pub enum Screen {
     Inventory,
     Paused,
     GameOver,
-}
-
-/// State for the main menu (e.g. selected option).
-pub struct MainMenuState {
-    // TODO: selected: usize
-}
-
-/// State for the inventory screen (e.g. cursor position).
-pub struct InventoryState {
-    // TODO: selected: usize
-}
-
-/// Final results shown on the GameOver screen (contract 5).
-pub struct GameSummary {
-    // TODO: final_depth: u32, cause_of_death: String, final stats
 }

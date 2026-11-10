@@ -21,10 +21,7 @@ use level::{Level, generator::LevelGenerator};
 use rand::{SeedableRng, rngs::StdRng};
 use screen::Screen;
 
-/// Owns screen navigation and generated levels while gameplay systems are completed.
-///
-/// TODO(team): integrate Player, inventory contents, combat, turns, and MessageLog.
-/// The TUI consumes this state without owning transitions or level construction.
+/// Owns screen navigation and the active dungeon floor.
 pub struct Game {
     screen: Screen,
     menu_selection: usize,
@@ -71,8 +68,7 @@ impl Game {
         self.should_quit
     }
 
-    /// Processes menu, inventory, and pause navigation; unfinished gameplay actions
-    /// leave state unchanged rather than simulating movement or combat.
+    /// Processes menu and pause navigation.
     pub fn process_action(&mut self, action: &Action) {
         if self.should_quit {
             return;
@@ -91,16 +87,12 @@ impl Game {
                 Action::Confirm => self.should_quit = true,
                 _ => {}
             },
-            Screen::Playing => match action {
-                Action::OpenInventory => self.screen = Screen::Inventory,
-                Action::Pause => self.screen = Screen::Paused,
-                _ => {}
-            },
-            Screen::Inventory => {
-                if matches!(action, Action::Back | Action::OpenInventory) {
-                    self.screen = Screen::Playing;
+            Screen::Playing => {
+                if matches!(action, Action::Pause) {
+                    self.screen = Screen::Paused;
                 }
             }
+            Screen::Inventory => {}
             Screen::Paused => match action {
                 Action::Pause | Action::Confirm => self.screen = Screen::Playing,
                 Action::Back => self.return_to_menu(),
@@ -111,29 +103,6 @@ impl Game {
                     self.return_to_menu();
                 }
             }
-        }
-    }
-
-    /// Regenerates the current preview floor only while the Playing screen is active.
-    pub fn regenerate_preview(&mut self) {
-        if matches!(self.screen, Screen::Playing)
-            && !self.should_quit
-            && let Some(level) = &self.level
-        {
-            self.level = Some(LevelGenerator::generate_level(level.depth(), &mut self.rng));
-        }
-    }
-
-    /// Advances the preview depth without implementing gameplay progression rules.
-    pub fn advance_preview(&mut self) {
-        if matches!(self.screen, Screen::Playing)
-            && !self.should_quit
-            && let Some(level) = &self.level
-        {
-            self.level = Some(LevelGenerator::generate_level(
-                level.depth().saturating_add(1),
-                &mut self.rng,
-            ));
         }
     }
 
@@ -149,26 +118,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn menu_inventory_and_pause_navigation_preserves_the_active_level() {
+    fn menu_and_pause_navigation_preserves_the_active_level() {
         let mut game = Game::new();
         assert!(matches!(game.screen(), Screen::MainMenu));
         assert!(game.level().is_none());
         game.process_action(&Action::Confirm);
         assert!(matches!(game.screen(), Screen::Playing));
-        game.advance_preview();
         let start = game.level().unwrap().player_start();
-        game.process_action(&Action::OpenInventory);
-        assert!(matches!(game.screen(), Screen::Inventory));
-        game.advance_preview();
-        assert_eq!(game.level().unwrap().depth(), 1);
-        game.process_action(&Action::Back);
-        assert!(matches!(game.screen(), Screen::Playing));
         game.process_action(&Action::Pause);
         assert!(matches!(game.screen(), Screen::Paused));
         game.process_action(&Action::Confirm);
         assert!(matches!(game.screen(), Screen::Playing));
         assert_eq!(game.level().unwrap().player_start(), start);
-        assert_eq!(game.level().unwrap().depth(), 1);
+        assert_eq!(game.level().unwrap().depth(), 0);
         game.process_action(&Action::Pause);
         game.process_action(&Action::Back);
         assert!(matches!(game.screen(), Screen::MainMenu));
@@ -180,7 +142,6 @@ mod tests {
     #[test]
     fn quit_menu_entry_and_global_quit_end_the_session() {
         let mut game = Game::new();
-        game.regenerate_preview();
         assert!(game.level().is_none());
         game.process_action(&Action::MoveDown);
         assert_eq!(game.menu_selection(), 1);
@@ -189,7 +150,6 @@ mod tests {
         assert!(game.level().is_none());
         let mut game = Game::new();
         game.process_action(&Action::Confirm);
-        game.process_action(&Action::OpenInventory);
         game.process_action(&Action::Quit);
         assert!(game.should_quit());
     }
