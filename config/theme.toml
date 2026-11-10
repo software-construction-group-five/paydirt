@@ -1,1 +1,34 @@
-# Theme Config (Symbol Definitions)
+# Characters and foreground colors used by the terminal renderer.
+# Colors: "reset" (terminal default), "white", "darkgray", "yellow", etc.,
+# or an RGB hex value such as "#d4a64a". Glyphs must be single printable ASCII.
+# Backgrounds always use the terminal default and cannot be configured.
+
+[ui]
+text = "#d6cbb5"
+muted = "#8a8478"
+accent = "#d4a64a"
+danger = "#d96854"
+
+[tiles.wall]
+symbol = "#"
+color = "#93979c"
+
+[tiles.floor]
+symbol = "."
+color = "#746b59"
+
+[tiles.door_open]
+symbol = "/"
+color = "#b58a55"
+
+[tiles.door_closed]
+symbol = "+"
+color = "#92663e"
+
+[tiles.stairs_down]
+symbol = ">"
+color = "#82b7ad"
+
+[player]
+symbol = "@"
+color = "#FF8200"
