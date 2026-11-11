@@ -87,7 +87,7 @@ mod tests {
             Position::new(1, 1),
             Stats::new(100, 15, 5),
             Inventory::new(),
-            Equipment {},
+            Equipment::new(),
         )
     }
 

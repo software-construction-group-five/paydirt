@@ -26,19 +26,14 @@ impl Equipment {
 
     /// Equips a weapon or armor in its matching slot, replacing any item already there.
     ///
-    /// Returns true if the item was equipped, or false if it is a consumable.
-    pub fn equip(&mut self, item: Item) -> bool {
+    /// Returns the displaced item on success, or the rejected consumable on error.
+    /// The caller can return either item to inventory without losing ownership.
+    pub fn equip(&mut self, item: Item) -> Result<Option<Item>, Item> {
         match item.kind {
-            ItemType::Weapon => {
-                self.weapon = Some(item);
-                true
-            }
-            ItemType::Armor => {
-                self.armor = Some(item);
-                true
-            }
+            ItemType::Weapon => Ok(self.weapon.replace(item)),
+            ItemType::Armor => Ok(self.armor.replace(item)),
             // Consumables are used up, not worn, so they can't be equipped.
-            ItemType::Consumable => false,
+            ItemType::Consumable => Err(item),
         }
     }
 
@@ -81,8 +76,8 @@ mod tests {
     #[test]
     fn equip_puts_items_in_matching_slot() {
         let mut equipment = Equipment::new();
-        assert!(equipment.equip(get_item(0))); // Pickaxe (weapon)
-        assert!(equipment.equip(get_item(1))); // Leather Armor (armor)
+        assert_eq!(equipment.equip(get_item(0)), Ok(None)); // Pickaxe (weapon)
+        assert_eq!(equipment.equip(get_item(1)), Ok(None)); // Leather Armor (armor)
         assert_eq!(equipment.weapon, Some(get_item(0)));
         assert_eq!(equipment.armor, Some(get_item(1)));
     }
@@ -91,8 +86,34 @@ mod tests {
     #[test]
     fn equip_rejects_consumable() {
         let mut equipment = Equipment::new();
-        assert!(!equipment.equip(get_item(2))); // Health Potion (consumable)
+        assert_eq!(equipment.equip(get_item(2)), Err(get_item(2))); // Health Potion
         assert_eq!(equipment.weapon, None);
         assert_eq!(equipment.armor, None);
+    }
+
+    #[test]
+    fn replacement_returns_previous_item_and_preserves_other_slot() {
+        let mut equipment = Equipment::new();
+        equipment.equip(get_item(0)).unwrap();
+        equipment.equip(get_item(1)).unwrap();
+
+        for index in [0, 1] {
+            let mut replacement = get_item(index);
+            replacement.name = format!("Replacement {index}");
+            assert_eq!(
+                equipment.equip(replacement.clone()),
+                Ok(Some(get_item(index)))
+            );
+            if index == 0 {
+                assert_eq!(equipment.weapon, Some(replacement));
+                assert_eq!(equipment.armor, Some(get_item(1)));
+            } else {
+                assert_eq!(equipment.armor, Some(replacement));
+                assert_eq!(equipment.weapon.as_ref().unwrap().name, "Replacement 0");
+            }
+        }
+        let before = equipment.clone();
+        assert_eq!(equipment.equip(get_item(2)), Err(get_item(2)));
+        assert_eq!(equipment, before);
     }
 }
