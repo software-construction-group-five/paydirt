@@ -50,8 +50,32 @@ Initial enemy and item spawns must pass `is_spawn_tile()`: only ordinary floor
 outside the entire starting room is eligible. The generator retains the first
 room's actual shape, including circular boundaries, rather than excluding a fixed
 distance around the player. Stairs and blocked terrain are excluded. Generation
-must also choose distinct initial positions across enemies and items. Population
-will be added in the next implementation phase; floors currently remain empty.
+chooses distinct initial positions across enemies and items using the supplied RNG.
+Populations are stored in Level; drawing them is the next implementation phase.
+
+### Population tuning
+
+Dungeon depth is zero-based. Species use their existing combat stats:
+
+| Species | Minimum depth | Relative difficulty | Selection weight |
+| --- | --- | --- | --- |
+| Slime | 0 | 1 | 1 |
+| Ghost | 2 | 2 | depth − 1 |
+| Goblin | 4 | 3 | (depth − 3)² |
+
+Species below their minimum depth have zero weight. Stronger species become more
+common as depth increases, raising average difficulty while retaining variation.
+Difficulty eventually approaches the strongest existing species; stats do not scale.
+Profiles and placement rules live in `src/game/level/generator.rs`.
+
+Each floor targets `4 + min(depth, 16)` enemies and
+`3 + min(depth / 3, 5)` items. Candidates are shuffled once and consumed without
+replacement. On cramped floors, reserve up to half the available tiles for items,
+then place as many enemies and items as fit. Placement terminates with no retries.
+
+Items are chosen uniformly from eligible entries in the current three-item catalog.
+Catalog level one is available at dungeon depth zero; availability uses saturating
+`depth + 1`. Identical depth and RNG seed reproduce terrain and population.
 
 These spawn restrictions do not apply during gameplay: enemies may enter the
 starting room and stairs. Dropped items may occupy any walkable tile and share

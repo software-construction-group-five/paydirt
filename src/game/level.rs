@@ -10,6 +10,10 @@ use std::collections::{BTreeMap, HashSet};
 use crate::game::{enemy::Enemy, item::Item, position::Position};
 use map::Map;
 
+////////////////////////////////////////////////////////////////////////////////
+// ENTITY TYPES
+////////////////////////////////////////////////////////////////////////////////
+
 /// Stable enemy identity within one Level. IDs are never reused on that floor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EnemyId(u64);
@@ -21,6 +25,10 @@ pub struct GroundItem {
     /// The map tile holding the item.
     pub position: Position,
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// LEVEL STATE
+////////////////////////////////////////////////////////////////////////////////
 
 /// One generated dungeon floor, including navigation anchors and entity storage.
 pub struct Level {
@@ -56,6 +64,10 @@ impl Level {
         }
     }
 
+    ////////////////////////////////////////////////////////////////////////////////
+    // TERRAIN AND PROGRESSION ACCESS
+    ////////////////////////////////////////////////////////////////////////////////
+
     /// Provides read-only terrain access (contract 8).
     pub fn get_map(&self) -> &Map {
         &self.map
@@ -81,6 +93,10 @@ impl Level {
         self.stairs_down
     }
 
+    ////////////////////////////////////////////////////////////////////////////////
+    // SPAWN ELIGIBILITY
+    ////////////////////////////////////////////////////////////////////////////////
+
     /// Whether terrain permits an initial enemy or item spawn (contract 19).
     /// Excludes the entire starting room and stairs, but does not check occupancy.
     /// Runtime movement and item drops use different, less restrictive rules.
@@ -91,6 +107,10 @@ impl Level {
                 .get(position)
                 .is_some_and(|tile| tile.kind == map::TileType::Floor)
     }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // ENEMY STORAGE AND MOVEMENT
+    ////////////////////////////////////////////////////////////////////////////////
 
     /// Iterates enemies in insertion-ID order without allowing unchecked movement.
     pub fn enemies(&self) -> impl Iterator<Item = (EnemyId, &Enemy)> {
@@ -144,6 +164,10 @@ impl Level {
     pub fn remove_enemy(&mut self, id: EnemyId) -> Option<Enemy> {
         self.enemies.remove(&id)
     }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // GROUND ITEM STORAGE
+    ////////////////////////////////////////////////////////////////////////////////
 
     /// Borrows ground entries in insertion order. Indices change after removal.
     pub fn ground_items(&self) -> &[GroundItem] {

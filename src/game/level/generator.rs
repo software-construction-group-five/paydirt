@@ -1,15 +1,23 @@
 //! Procedural level construction (SDD 3.8).
 //!
-//! Builds the terrain and navigation anchors for SDD contract 19.
+//! Builds terrain, navigation anchors, and entity populations for SDD contract 19.
 //! Stateless between calls; Game decides when a level is needed.
 
 use rand::{Rng, RngExt, seq::SliceRandom};
 
-use crate::game::level::{
-    Level,
-    map::{Map, TileType},
+use crate::game::{
+    enemy::{Enemy, EnemyType},
+    item::{Item, get_item},
+    level::{
+        Level,
+        map::{Map, TileType},
+    },
+    position::Position,
 };
-use crate::game::position::Position;
+
+////////////////////////////////////////////////////////////////////////////////
+// TERRAIN GENERATION SETTINGS
+////////////////////////////////////////////////////////////////////////////////
 
 const MAP_WIDTH: usize = 80;
 const MAP_HEIGHT: usize = 21;
@@ -25,6 +33,10 @@ const WATER_ROOM_CHANCE: f64 = 0.4;
 const WATER_MIN_DIAMETER: usize = 9;
 const WATER_PLACEMENT_ATTEMPTS: usize = 12;
 
+////////////////////////////////////////////////////////////////////////////////
+// LEVEL GENERATION
+////////////////////////////////////////////////////////////////////////////////
+
 /// Builds dungeon floors.
 pub struct LevelGenerator;
 
@@ -36,15 +48,141 @@ impl LevelGenerator {
         let player_start = starting_room.center();
         let stairs_down = explore(&map, player_start).0;
         map.set(stairs_down, TileType::StairsDown);
-        Level::new(
+        let mut level = Level::new(
             map,
             depth,
             player_start,
             stairs_down,
             starting_room.positions(),
-        )
+        );
+        populate(&mut level, rng);
+        level
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// POPULATION RULES AND SELECTION
+////////////////////////////////////////////////////////////////////////////////
+
+/// Generation tuning ordered from weakest to strongest by current combat stats.
+struct EnemySpawnProfile {
+    kind: EnemyType,
+    minimum_depth: u32,
+    difficulty: u32,
+}
+
+const ENEMY_SPAWN_PROFILES: [EnemySpawnProfile; 3] = [
+    EnemySpawnProfile {
+        kind: EnemyType::Slime,
+        minimum_depth: 0,
+        difficulty: 1,
+    },
+    EnemySpawnProfile {
+        kind: EnemyType::Ghost,
+        minimum_depth: 2,
+        difficulty: 2,
+    },
+    EnemySpawnProfile {
+        kind: EnemyType::Goblin,
+        minimum_depth: 4,
+        difficulty: 3,
+    },
+];
+
+impl EnemySpawnProfile {
+    /// Stronger species gain weight faster after unlocking; weak species remain possible.
+    fn weight(&self, depth: u32) -> u64 {
+        if depth < self.minimum_depth {
+            return 0;
+        }
+        let depths_since_unlock = u64::from(depth - self.minimum_depth) + 1;
+        depths_since_unlock.pow(self.difficulty - 1)
+    }
+}
+
+/// Selects a species by its depth-dependent weight, excluding locked species.
+fn choose_enemy(depth: u32, rng: &mut impl Rng) -> EnemyType {
+    let total: u64 = ENEMY_SPAWN_PROFILES
+        .iter()
+        .map(|profile| profile.weight(depth))
+        .sum();
+    let mut roll = rng.random_range(0..total);
+    for profile in &ENEMY_SPAWN_PROFILES {
+        let weight = profile.weight(depth);
+        if roll < weight {
+            return profile.kind;
+        }
+        roll -= weight;
+    }
+    unreachable!("slimes are available at every depth")
+}
+
+/// Filters the current catalog to items unlocked at this dungeon depth.
+fn available_items(depth: u32) -> Vec<Item> {
+    // Catalog levels are one-based; dungeon depths are zero-based.
+    let catalog_level = depth.saturating_add(1);
+    (0..3)
+        .map(get_item)
+        .filter(|item| item.level <= catalog_level)
+        .collect()
+}
+
+/// Returns the enemy and item targets before limiting them to available space.
+fn target_counts(depth: u32) -> (usize, usize) {
+    // Cap density and arithmetic before converting to platform-sized counts.
+    let enemies = 4 + depth.min(16) as usize;
+    let items = 3 + (depth / 3).min(5) as usize;
+    (enemies, items)
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// ENTITY PLACEMENT
+////////////////////////////////////////////////////////////////////////////////
+
+/// Populates only eligible, unoccupied tiles using the caller's RNG for every choice.
+fn populate(level: &mut Level, rng: &mut impl Rng) {
+    let mut candidates: Vec<_> = level
+        .get_map()
+        .positions()
+        .filter(|&position| {
+            level.is_spawn_tile(position)
+                && level.enemy_at(position).is_none()
+                && level.ground_items_at(position).next().is_none()
+        })
+        .collect();
+    candidates.shuffle(rng);
+    let (enemy_count, item_count) = target_counts(level.depth());
+    let items = available_items(level.depth());
+
+    // Reserve item space before placing enemies so a cramped floor can supply both.
+    let reserved_items = item_count.min(candidates.len() / 2);
+    let enemy_count = enemy_count.min(candidates.len() - reserved_items);
+    for _ in 0..enemy_count {
+        let position = candidates
+            .pop()
+            .expect("enemy count is bounded by available tiles");
+        let enemy = Enemy::new(choose_enemy(level.depth(), rng), position);
+        assert!(
+            level.insert_enemy(enemy).is_ok(),
+            "validated enemy placement failed"
+        );
+    }
+    // Remaining candidates supply items without overlapping any initial enemy.
+    if items.is_empty() {
+        return;
+    }
+    for position in candidates.into_iter().take(item_count) {
+        let item = items[rng.random_range(0..items.len())].clone();
+        assert!(
+            level.insert_ground_item(item, position).is_ok(),
+            "validated item placement failed"
+        );
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// DUNGEON LAYOUT
+////////////////////////////////////////////////////////////////////////////////
 
 /// Carves rooms and connecting corridors; the first accepted room owns the start.
 fn generate_layout(depth: u32, rng: &mut impl Rng) -> (Map, Room) {
@@ -72,6 +210,10 @@ fn generate_layout(depth: u32, rng: &mut impl Rng) -> (Map, Room) {
     add_rocks(&mut map, &rooms, player_start, rng);
     (map, rooms.remove(0))
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// CONNECTIVITY AND STAIR PLACEMENT
+////////////////////////////////////////////////////////////////////////////////
 
 /// Returns the most distant floor and connected tile count with doors openable.
 /// This topology check excludes rocks, water, and walls without changing doors.
@@ -106,6 +248,10 @@ fn connected_terrain(map: &Map, position: Position) -> bool {
     map.get(position)
         .is_some_and(|tile| tile.kind.is_walkable() || matches!(tile.kind, TileType::Door { .. }))
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// DOOR PLACEMENT
+////////////////////////////////////////////////////////////////////////////////
 
 /// Adds spaced, closed doors where a narrow hallway meets a room boundary.
 fn add_doors(map: &mut Map, rooms: &[Room], rng: &mut impl Rng) {
@@ -155,6 +301,10 @@ fn add_doors(map: &mut Map, rooms: &[Room], rng: &mut impl Rng) {
         doors.push(position);
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// OBSTACLE PLACEMENT
+////////////////////////////////////////////////////////////////////////////////
 
 /// Keeps decoration away from room centers, the player, and narrow entrances.
 fn obstacle_site(map: &Map, room: &Room, start: Position, position: Position) -> bool {
@@ -285,6 +435,10 @@ fn add_rocks(map: &mut Map, rooms: &[Room], start: Position, rng: &mut impl Rng)
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// ROOM GEOMETRY
+////////////////////////////////////////////////////////////////////////////////
+
 /// A room's dimension. Circular rooms fill a circle inside  a square box.
 struct Room {
     x: usize,
@@ -357,6 +511,10 @@ impl Room {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// CORRIDOR CARVING
+////////////////////////////////////////////////////////////////////////////////
+
 /// Joins two points with an L-shaped hallway, randomly turning horizontally or vertically first.
 fn carve_corridor(map: &mut Map, from: Position, to: Position, rng: &mut impl Rng) {
     let corner = if rng.random_bool(0.5) {
@@ -386,6 +544,109 @@ mod tests {
     use super::*;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
+    use std::collections::HashSet;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // POPULATION TESTS
+    ////////////////////////////////////////////////////////////////////////////////
+
+    #[test]
+    fn populations_are_reproducible_valid_and_depth_gated() {
+        for depth in [0, 1, 2, 3, 4, 8, 20, u32::MAX] {
+            for seed in 0..20 {
+                let first = LevelGenerator::generate_level(depth, &mut StdRng::seed_from_u64(seed));
+                let second =
+                    LevelGenerator::generate_level(depth, &mut StdRng::seed_from_u64(seed));
+                let snapshot = |level: &Level| {
+                    level
+                        .enemies()
+                        .map(|(id, enemy)| {
+                            (id, *enemy.kind(), *enemy.position(), enemy.stats().hp())
+                        })
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(snapshot(&first), snapshot(&second));
+                let item_snapshot = |level: &Level| {
+                    level
+                        .ground_items()
+                        .iter()
+                        .map(|entry| (entry.position, entry.item.clone()))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(item_snapshot(&first), item_snapshot(&second));
+                let mut occupied = HashSet::new();
+                for (_, enemy) in first.enemies() {
+                    assert!(first.is_spawn_tile(*enemy.position()));
+                    assert!(occupied.insert(*enemy.position()));
+                    let profile = ENEMY_SPAWN_PROFILES
+                        .iter()
+                        .find(|profile| profile.kind == *enemy.kind())
+                        .unwrap();
+                    assert!(depth >= profile.minimum_depth);
+                }
+                for entry in first.ground_items() {
+                    assert!(first.is_spawn_tile(entry.position));
+                    assert!(occupied.insert(entry.position));
+                    assert!(entry.item.level <= depth.saturating_add(1));
+                }
+                let (enemies, items) = target_counts(depth);
+                assert_eq!(first.enemies().count(), enemies);
+                assert_eq!(first.ground_items().len(), items);
+            }
+        }
+    }
+
+    #[test]
+    fn cramped_and_empty_floors_stop_when_candidates_run_out() {
+        for free_tiles in 0..5 {
+            let mut map = Map::new(8, 3);
+            let start = Position::new(1, 1);
+            map.set(start, TileType::Floor);
+            for x in 2..2 + free_tiles {
+                map.set(Position::new(x, 1), TileType::Floor);
+            }
+            let mut level = Level::new(map, 0, start, Position::new(7, 1), [start]);
+            populate(&mut level, &mut StdRng::seed_from_u64(7));
+            assert_eq!(
+                level.enemies().count() + level.ground_items().len(),
+                free_tiles
+            );
+            let count = level.enemies().count();
+            populate(&mut level, &mut StdRng::seed_from_u64(8));
+            assert_eq!(level.enemies().count(), count);
+        }
+    }
+
+    #[test]
+    fn average_enemy_difficulty_increases_across_seeded_floors() {
+        let mut previous_average = 0.0;
+        for depth in [0, 2, 4, 8, 20] {
+            let (mut total, mut count) = (0_u64, 0_u64);
+            for seed in 0..100 {
+                let level = LevelGenerator::generate_level(depth, &mut StdRng::seed_from_u64(seed));
+                for (_, enemy) in level.enemies() {
+                    total += u64::from(
+                        ENEMY_SPAWN_PROFILES
+                            .iter()
+                            .find(|profile| profile.kind == *enemy.kind())
+                            .unwrap()
+                            .difficulty,
+                    );
+                    count += 1;
+                }
+            }
+            let average = total as f64 / count as f64;
+            assert!(
+                average > previous_average,
+                "difficulty did not rise at depth {depth}"
+            );
+            previous_average = average;
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // STARTING ROOM AND SPAWN ELIGIBILITY TESTS
+    ////////////////////////////////////////////////////////////////////////////////
 
     #[test]
     fn spawn_tiles_exclude_the_whole_starting_room_for_both_shapes() {
@@ -437,6 +698,10 @@ mod tests {
             }
         }
     }
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // TERRAIN AND NAVIGATION TESTS
+    ////////////////////////////////////////////////////////////////////////////////
 
     /// Generates levels for several depths and seeds, so circles are included.
     fn sample_levels() -> impl Iterator<Item = Level> {

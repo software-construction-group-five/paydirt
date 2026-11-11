@@ -20,6 +20,7 @@ pub struct Enemy {
 }
 
 /// Enemy species. Each maps to an AiProfile that drives divergent behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnemyType {
 	// TODO: Come up with some enemy types
     Goblin,
