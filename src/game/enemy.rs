@@ -7,7 +7,7 @@
 //!
 //! Decision-making lives in `ai`; Game applies the results.
 use crate::game::position::Position;
-use crate::game::stats::{Stats, StatusEffect};
+use crate::game::stats::Stats;
     
 /// A single enemy instance in a Level.
 pub struct Enemy {
@@ -73,8 +73,8 @@ impl Enemy{
 
     // - 13 Enemy Update: update position and AI state
     //(Contract 13, Protocol 1)
-    pub fn update_position(&mut self, newPosition: Position){
-        self.position = newPosition;
+    pub fn update_position(&mut self, new_position: Position){
+        self.position = new_position;
     }
 
     //(Contract 13, Protocol 2) 
@@ -85,6 +85,16 @@ impl Enemy{
             AiState::Fleeing => self.ai = AiState::Fleeing,//continue fleeing
             AiState::Idle => self.ai = if self.stats.hp() >= self.flee_below_hp { AiState::Attacking } else { AiState::Fleeing },
         }
+    }
+    /*
+    /// Positive amounts heal; negative amounts damage. Health stays in bounds.
+    pub fn update_health(&mut self, amount: i32) {
+        self.hp = self.hp.saturating_add(amount).clamp(0, self.max_hp);
+    }
+    */
+    pub fn take_damage(&mut self, amount:i32){
+        self.stats.update_health(amount);
+        self.update_status();
     }
 
     // - 14 Combat Information: attack roll
