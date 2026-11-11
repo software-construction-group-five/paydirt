@@ -127,6 +127,9 @@ fn bindings(table: BTreeMap<String, Vec<String>>) -> io::Result<Vec<Binding>> {
             let (action, description) = match name.as_str() {
                 "move_up" => (Action::MoveUp, "up"),
                 "move_down" => (Action::MoveDown, "down"),
+                "move_left" => (Action::MoveLeft, "left"),
+                "move_right" => (Action::MoveRight, "right"),
+                "wait" => (Action::Wait, "wait"),
                 "pause" => (Action::Pause, "pause/resume"),
                 "confirm" => (Action::Confirm, "confirm"),
                 "back" => (Action::Back, "back"),
@@ -266,6 +269,22 @@ mod tests {
             ),
             Some(Action::Quit)
         ));
+    }
+
+    #[test]
+    fn playing_keys_map_to_movement_and_wait_and_appear_in_help() {
+        let bindings = Keybinds::parse(CONFIG).unwrap();
+        let press =
+            |code| bindings.action(&Screen::Playing, KeyEvent::new(code, KeyModifiers::NONE));
+        assert!(matches!(press(KeyCode::Up), Some(Action::MoveUp)));
+        assert!(matches!(press(KeyCode::Down), Some(Action::MoveDown)));
+        assert!(matches!(press(KeyCode::Left), Some(Action::MoveLeft)));
+        assert!(matches!(press(KeyCode::Right), Some(Action::MoveRight)));
+        assert!(matches!(press(KeyCode::Char('.')), Some(Action::Wait)));
+        let help = bindings.help(&Screen::Playing);
+        for hint in ["left", "right", "wait"] {
+            assert!(help.contains(hint));
+        }
     }
 
     #[test]

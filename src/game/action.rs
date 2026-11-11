@@ -7,6 +7,9 @@
 pub enum Action {
     MoveUp,
     MoveDown,
+    MoveLeft,
+    MoveRight,
+    Wait,
     Pause,
     Confirm,
     Back,
