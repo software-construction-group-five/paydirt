@@ -59,6 +59,11 @@ impl Level {
             _ => false,
         }
     }
+
+    /// Returns the exit reachable after opening intervening doors.
+    pub fn stairs_down(&self) -> Position {
+        self.stairs_down
+    }
 }
 
 #[cfg(test)]
