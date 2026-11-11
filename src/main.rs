@@ -6,7 +6,7 @@ use std::{io, path::Path};
 
 use paydirt::{
     game::Game,
-    tui::{LevelView, RenderView, Renderer, input::Keybinds, theme::Theme},
+    tui::{LevelView, RenderView, Renderer, StatusView, input::Keybinds, theme::Theme},
 };
 use ratatui::DefaultTerminal;
 
@@ -38,21 +38,73 @@ fn run(terminal: &mut DefaultTerminal, renderer: &Renderer, keybinds: &Keybinds)
     let mut game = Game::new();
     while !game.should_quit() {
         let help = keybinds.help(game.screen());
-        let level = game.level().map(|level| {
-            let mut view = LevelView::new(level.get_map());
-            view.depth = Some(level.depth());
-            view
-        });
-        let view = RenderView {
-            level,
-            selected: game.menu_selection(),
-            help: &help,
-            ..Default::default()
-        };
-        terminal.draw(|frame| renderer.render(frame, game.screen(), &view))?;
+        with_view(&game, &help, |view| {
+            terminal.draw(|frame| renderer.render(frame, game.screen(), view))
+        })?;
         if let Some(action) = keybinds.read_input(game.screen())? {
             game.process_action(action);
         }
     }
     Ok(())
+}
+
+
+/// Builds the display data from Game's current state and passes it to `draw`
+/// (Player Contract 6 for position and health, Renderer Contract 20).
+fn with_view<R>(game: &Game, help: &str, draw: impl FnOnce(&RenderView<'_>) -> R) -> R {
+    let player = game.player();
+    let messages: Vec<&str> = game
+        .message_log()
+        .messages()
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let level = game.level().map(|level| {
+        let mut view = LevelView::new(level.get_map());
+        view.depth = Some(level.depth());
+        // The renderer centers the map on this position
+        view.player = player.map(|player| player.get_position());
+        view
+    });
+    let status = StatusView {
+        health: player.map(|player| (player.get_stats().hp(), player.get_stats().max_hp())),
+        ..Default::default()
+    };
+    let view = RenderView {
+        level,
+        status,
+        messages: &messages,
+        selected: game.menu_selection(),
+        help,
+        ..Default::default()
+    };
+    draw(&view)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paydirt::game::{action::Action, screen::Screen};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn playing_screen_shows_the_player_and_health() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        let renderer = Renderer::default();
+        let mut terminal = Terminal::new(TestBackend::new(120, 35)).unwrap();
+        with_view(&game, "", |view| {
+            terminal.draw(|frame| renderer.render(frame, &Screen::Playing, view))
+        })
+        .unwrap();
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(screen.contains('@'));
+        assert!(screen.contains("Health: 100 / 100"));
+    }
 }
