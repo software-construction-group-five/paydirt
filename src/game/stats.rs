@@ -1,5 +1,5 @@
 //! Combat and health statistics shared by Player and Enemy.
-//Derived from Player Contract 7 - Update Player Health 
+//Derived from Player Contract 7 - Update Player Health
 
 /// A damaging effect. Durations are measured in gameplay turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,16 +14,26 @@ impl StatusEffect {
     pub fn new(name: String, damage_per_turn: i32, turns: u32) -> Self {
         assert!(damage_per_turn >= 0, "Effect damage cannot be negative.");
         assert!(turns > 0, "Effect duration must be positive.");
-        Self { name, damage_per_turn, turns_remaining: turns }
+        Self {
+            name,
+            damage_per_turn,
+            turns_remaining: turns,
+        }
     }
 
-    pub fn name(&self) -> &str { &self.name }
-    pub fn damage_per_turn(&self) -> i32 { self.damage_per_turn }
-    pub fn turns_remaining(&self) -> u32 { self.turns_remaining }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn damage_per_turn(&self) -> i32 {
+        self.damage_per_turn
+    }
+    pub fn turns_remaining(&self) -> u32 {
+        self.turns_remaining
+    }
 }
 
 /// Health, combat values, and at most three active status effects.
-pub struct Stats { 
+pub struct Stats {
     hp: i32,
     max_hp: i32,
     attack: i32,
@@ -36,14 +46,30 @@ impl Stats {
         assert!(max_hp > 0, "Maximum health must be positive.");
         assert!(attack >= 0, "Attack cannot be negative.");
         assert!(defense >= 0, "Defense cannot be negative.");
-        Self { hp: max_hp, max_hp, attack, defense, status_effects: Vec::new() }
+        Self {
+            hp: max_hp,
+            max_hp,
+            attack,
+            defense,
+            status_effects: Vec::new(),
+        }
     }
 
-    pub fn hp(&self) -> i32 { self.hp }
-    pub fn max_hp(&self) -> i32 { self.max_hp }
-    pub fn attack(&self) -> i32 { self.attack }
-    pub fn defense(&self) -> i32 { self.defense }
-    pub fn status_effects(&self) -> &[StatusEffect] { &self.status_effects }
+    pub fn hp(&self) -> i32 {
+        self.hp
+    }
+    pub fn max_hp(&self) -> i32 {
+        self.max_hp
+    }
+    pub fn attack(&self) -> i32 {
+        self.attack
+    }
+    pub fn defense(&self) -> i32 {
+        self.defense
+    }
+    pub fn status_effects(&self) -> &[StatusEffect] {
+        &self.status_effects
+    }
 
     /// Positive amounts heal; negative amounts damage. Health stays in bounds.
     pub fn update_health(&mut self, amount: i32) {
@@ -70,18 +96,23 @@ impl Stats {
             effect.turns_remaining -= 1;
         }
         self.update_health(-damage);
-        self.status_effects.retain(|effect| effect.turns_remaining > 0);
+        self.status_effects
+            .retain(|effect| effect.turns_remaining > 0);
         old_hp - self.hp
     }
 
-    pub fn is_dead(&self) -> bool { self.hp == 0 }
+    pub fn is_dead(&self) -> bool {
+        self.hp == 0
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Stats, StatusEffect};
 
-    fn stats() -> Stats { Stats::new(100, 15, 5) }
+    fn stats() -> Stats {
+        Stats::new(100, 15, 5)
+    }
     fn effect(name: &str, damage: i32, turns: u32) -> StatusEffect {
         StatusEffect::new(String::from(name), damage, turns)
     }
@@ -89,7 +120,10 @@ mod tests {
     #[test]
     fn new_stats_start_at_full_health() {
         let s = stats();
-        assert_eq!((s.hp(), s.max_hp(), s.attack(), s.defense()), (100, 100, 15, 5));
+        assert_eq!(
+            (s.hp(), s.max_hp(), s.attack(), s.defense()),
+            (100, 100, 15, 5)
+        );
         assert!(s.status_effects().is_empty());
         assert!(!s.is_dead());
     }
@@ -185,21 +219,31 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "Maximum health must be positive.")]
-    fn zero_max_health_is_rejected() { Stats::new(0, 15, 5); }
+    fn zero_max_health_is_rejected() {
+        Stats::new(0, 15, 5);
+    }
 
     #[test]
     #[should_panic(expected = "Attack cannot be negative.")]
-    fn negative_attack_is_rejected() { Stats::new(100, -1, 5); }
+    fn negative_attack_is_rejected() {
+        Stats::new(100, -1, 5);
+    }
 
     #[test]
     #[should_panic(expected = "Defense cannot be negative.")]
-    fn negative_defense_is_rejected() { Stats::new(100, 15, -1); }
+    fn negative_defense_is_rejected() {
+        Stats::new(100, 15, -1);
+    }
 
     #[test]
     #[should_panic(expected = "Effect damage cannot be negative.")]
-    fn negative_effect_damage_is_rejected() { effect("Poisoned", -1, 3); }
+    fn negative_effect_damage_is_rejected() {
+        effect("Poisoned", -1, 3);
+    }
 
     #[test]
     #[should_panic(expected = "Effect duration must be positive.")]
-    fn zero_effect_duration_is_rejected() { effect("Poisoned", 5, 0); }
+    fn zero_effect_duration_is_rejected() {
+        effect("Poisoned", 5, 0);
+    }
 }

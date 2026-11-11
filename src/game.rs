@@ -78,7 +78,7 @@ impl Game {
         self.level.as_ref()
     }
 
-    /// Returns the active player, absent before a session starts (Game State Access).
+    /// Returns the active player, absent before a session starts (contract 6).
     pub fn player(&self) -> Option<&Player> {
         self.player.as_ref()
     }
@@ -134,9 +134,10 @@ impl Game {
         TurnResult::NotSpent
     }
 
-    /// Starts a fresh session: new floor, new player at its start, empty log (Game Contract 1, InitializeGame).
+    /// Starts a fresh session: new floor, new player at its start, empty log (contract 1).
     fn initialize_game(&mut self) {
-        let level = LevelGenerator::generate_level(0, &mut self.rng);
+        let mut level = LevelGenerator::generate_level(0, &mut self.rng);
+        level.update_visibility(level.player_start());
         let stats = Stats::new(STARTING_MAX_HP, STARTING_ATTACK, STARTING_DEFENSE);
         self.player = Some(Player::new(
             level.player_start(),
@@ -152,7 +153,8 @@ impl Game {
     /// Moves the player one tile if the target is on the map and walkable;
     /// otherwise the player stays put (Game Contract 2, using Level Contract 9
     /// and Player Contract 7). Moving into a closed door opens it instead, and
-    /// the player stays put. Always spends the turn, even when blocked.
+    /// the player stays put. Enemies block movement until combat exists.
+    /// Updates line of sight after a move. Always spends the turn, even when blocked.
     fn move_player(&mut self, dx: isize, dy: isize) -> TurnResult {
         let (Some(player), Some(level)) = (self.player.as_mut(), self.level.as_mut()) else {
             return TurnResult::Spent;
@@ -162,14 +164,19 @@ impl Game {
         };
         // Bumping a closed door opens it; walking through takes another turn
         if level.open_door(target) {
+            // An open door no longer blocks sight, so refresh what the player sees
+            level.update_visibility(player.get_position());
             return TurnResult::Spent;
         }
         if !level.is_walkable(target) {
             return TurnResult::Spent;
         }
-        // TODO(joseph): once level-entities adds enemy lookup, send moves into an
-        // enemy to combat instead of moving (Level Contract 10)
+        if level.enemy_at(target).is_some() {
+            // TODO(joseph): attack the enemy once combat-turns is merged (Level Contract 10)
+            return TurnResult::Spent;
+        }
         player.set_position(target);
+        level.update_visibility(target);
         TurnResult::Spent
     }
 
@@ -194,6 +201,8 @@ mod tests {
         game.process_action(&Action::Confirm);
         assert!(matches!(game.screen(), Screen::Playing));
         let start = game.level().unwrap().player_start();
+        assert!(game.level().unwrap().get_map().is_visible(start));
+        assert!(game.level().unwrap().get_map().get(start).unwrap().seen);
         game.process_action(&Action::Pause);
         assert!(matches!(game.screen(), Screen::Paused));
         game.process_action(&Action::Confirm);
@@ -245,7 +254,10 @@ mod tests {
             game.player.as_mut().unwrap().set_position(start);
             let expected = start
                 .offset(dx, dy)
-                .filter(|&target| game.level().unwrap().is_walkable(target))
+                .filter(|&target| {
+                    let level = game.level().unwrap();
+                    level.is_walkable(target) && level.enemy_at(target).is_none()
+                })
                 .unwrap_or(start);
             game.process_action(&action);
             assert_eq!(game.player().unwrap().get_position(), expected);
@@ -256,7 +268,8 @@ mod tests {
     fn walking_into_a_wall_stops_the_player() {
         let mut game = Game::new();
         game.process_action(&Action::Confirm);
-        // Rooms are enclosed, so walking left long enough always hits something solid
+        // Rooms are enclosed, so walking left long enough always hits something
+        // solid (or an enemy, which also blocks)
         for _ in 0..100 {
             game.process_action(&Action::MoveLeft);
         }
@@ -266,7 +279,7 @@ mod tests {
         assert!(
             stopped
                 .offset(-1, 0)
-                .is_none_or(|left| !level.is_walkable(left))
+                .is_none_or(|left| !level.is_walkable(left) || level.enemy_at(left).is_some())
         );
     }
 

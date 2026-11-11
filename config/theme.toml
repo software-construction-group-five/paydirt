@@ -40,3 +40,28 @@ color = "#82b7ad"
 [player]
 symbol = "@"
 color = "#FF8200"
+
+# Entity entries are optional; omitted entries use these defaults.
+[enemies.goblin]
+symbol = "g"
+color = "red"
+
+[enemies.ghost]
+symbol = "G"
+color = "white"
+
+[enemies.slime]
+symbol = "s"
+color = "green"
+
+[items.weapon]
+symbol = ")"
+color = "yellow"
+
+[items.armor]
+symbol = "["
+color = "cyan"
+
+[items.consumable]
+symbol = "!"
+color = "magenta"

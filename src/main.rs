@@ -38,7 +38,7 @@ fn run(terminal: &mut DefaultTerminal, renderer: &Renderer, keybinds: &Keybinds)
     let mut game = Game::new();
     while !game.should_quit() {
         let help = keybinds.help(game.screen());
-        with_view(&game, &help, |view| {
+        with_view(&game, renderer, &help, |view| {
             terminal.draw(|frame| renderer.render(frame, game.screen(), view))
         })?;
         if let Some(action) = keybinds.read_input(game.screen())? {
@@ -48,11 +48,24 @@ fn run(terminal: &mut DefaultTerminal, renderer: &Renderer, keybinds: &Keybinds)
     Ok(())
 }
 
-
 /// Builds the display data from Game's current state and passes it to `draw`
 /// (Player Contract 6 for position and health, Renderer Contract 20).
-fn with_view<R>(game: &Game, help: &str, draw: impl FnOnce(&RenderView<'_>) -> R) -> R {
+fn with_view<R>(
+    game: &Game,
+    renderer: &Renderer,
+    help: &str,
+    draw: impl FnOnce(&RenderView<'_>) -> R,
+) -> R {
     let player = game.player();
+    let player_position = player.map(|player| player.get_position());
+    let enemies = game
+        .level()
+        .map(|level| renderer.enemy_entities(level))
+        .unwrap_or_default();
+    let items = game
+        .level()
+        .map(|level| renderer.item_entities(level))
+        .unwrap_or_default();
     let messages: Vec<&str> = game
         .message_log()
         .messages()
@@ -62,8 +75,11 @@ fn with_view<R>(game: &Game, help: &str, draw: impl FnOnce(&RenderView<'_>) -> R
     let level = game.level().map(|level| {
         let mut view = LevelView::new(level.get_map());
         view.depth = Some(level.depth());
-        // The renderer centers the map on this position
-        view.player = player.map(|player| player.get_position());
+        view.enemies = &enemies;
+        view.items = &items;
+        view.player = player_position;
+        // The camera follows the player once they exist
+        view.focus = player_position.or(Some(level.player_start()));
         view
     });
     let status = StatusView {
@@ -93,7 +109,7 @@ mod tests {
         game.process_action(&Action::Confirm);
         let renderer = Renderer::default();
         let mut terminal = Terminal::new(TestBackend::new(120, 35)).unwrap();
-        with_view(&game, "", |view| {
+        with_view(&game, &renderer, "", |view| {
             terminal.draw(|frame| renderer.render(frame, &Screen::Playing, view))
         })
         .unwrap();
