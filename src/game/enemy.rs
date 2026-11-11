@@ -69,7 +69,6 @@ impl Enemy{
     pub fn position(&self) -> &Position { &self.position }
     pub fn stats(&self) -> &Stats { &self.stats }
     pub fn ai(&self) -> &AiState { &self.ai}
-    pub fn get_hp(&self) -> i32 {self.stats.hp()}
 
 
     // - 13 Enemy Update: update position and AI state
@@ -79,7 +78,7 @@ impl Enemy{
     }
 
     //(Contract 13, Protocol 2) 
-    //CRC card lists method header as fn update_status(&mut self, statusCode: i32, effect: String) this is handled in ai state now
+    //CRC card lists method header as fn update_status(&mut self, statusCode: i32, effect: String) this has changed to simplify
     pub fn update_status(&mut self){
         match self.ai{
             AiState::Attacking => self.ai = AiState::Attacking,// continue attacking
@@ -87,12 +86,8 @@ impl Enemy{
             AiState::Idle => self.ai = if self.stats.hp() >= self.flee_below_hp { AiState::Attacking } else { AiState::Fleeing },
         }
     }
-    /*
-    /// Positive amounts heal; negative amounts damage. Health stays in bounds.
-    pub fn update_health(&mut self, amount: i32) {
-        self.hp = self.hp.saturating_add(amount).clamp(0, self.max_hp);
-    }
-    */
+    //(Contract 13, Protocol 3)
+    //added to implement checking status change if damage goes below fleeing threshold
     pub fn take_damage(&mut self, amount:i32){
         self.stats.update_health(amount);
         self.update_status();
@@ -128,7 +123,7 @@ mod tests {
     fn take_damage_and_update_status_changes_to_fleeing() {
         let mut a = Enemy::new(EnemyType::Goblin, Position::new(4,3));
         a.take_damage(-16);//25-16=9 which is when Goblin should first begin to flee
-        assert_eq!(a.get_hp(),9);//check hp correctly updated
+        assert_eq!(a.stats().hp(),9);//check hp correctly updated
         assert_matches!(a.ai(), AiState::Fleeing);//check ai state correctly updated
     }
 }
