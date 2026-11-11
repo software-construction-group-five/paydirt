@@ -5,7 +5,7 @@
 pub mod generator;
 pub mod map;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::game::{enemy::Enemy, item::Item, position::Position};
 use map::Map;
@@ -28,6 +28,7 @@ pub struct Level {
     depth: u32,
     player_start: Position,
     stairs_down: Position,
+    starting_room: HashSet<Position>,
     enemies: BTreeMap<EnemyId, Enemy>,
     next_enemy_id: Option<u64>,
     ground_items: Vec<GroundItem>,
@@ -36,12 +37,19 @@ pub struct Level {
 impl Level {
     // Construction stays inside this module so generation establishes the map,
     // anchors, and placement invariants together.
-    fn new(map: Map, depth: u32, player_start: Position, stairs_down: Position) -> Self {
+    fn new(
+        map: Map,
+        depth: u32,
+        player_start: Position,
+        stairs_down: Position,
+        starting_room: impl IntoIterator<Item = Position>,
+    ) -> Self {
         Self {
             map,
             depth,
             player_start,
             stairs_down,
+            starting_room: starting_room.into_iter().collect(),
             enemies: BTreeMap::new(),
             next_enemy_id: Some(0),
             ground_items: Vec::new(),
@@ -73,6 +81,17 @@ impl Level {
         self.stairs_down
     }
 
+    /// Whether terrain permits an initial enemy or item spawn (contract 19).
+    /// Excludes the entire starting room and stairs, but does not check occupancy.
+    /// Runtime movement and item drops use different, less restrictive rules.
+    pub fn is_spawn_tile(&self, position: Position) -> bool {
+        !self.starting_room.contains(&position)
+            && self
+                .map
+                .get(position)
+                .is_some_and(|tile| tile.kind == map::TileType::Floor)
+    }
+
     /// Iterates enemies in insertion-ID order without allowing unchecked movement.
     pub fn enemies(&self) -> impl Iterator<Item = (EnemyId, &Enemy)> {
         self.enemies.iter().map(|(&id, enemy)| (id, enemy))
@@ -92,7 +111,7 @@ impl Level {
 
     /// Inserts an enemy on walkable, unoccupied terrain and assigns a fresh ID.
     /// Returns ownership on rejection, including ID exhaustion. Game checks player
-    /// occupancy; generation applies start-area and stairs restrictions separately.
+    /// occupancy; generation applies starting-room and stairs restrictions separately.
     pub fn insert_enemy(&mut self, enemy: Enemy) -> Result<EnemyId, Enemy> {
         let position = *enemy.position();
         if !self.is_walkable(position) || self.enemy_at(position).is_some() {
@@ -176,7 +195,14 @@ mod tests {
         map.set(Position::new(1, 2), TileType::Door { open: false });
         map.set(Position::new(2, 2), TileType::Rock);
         map.set(Position::new(3, 2), TileType::Water);
-        Level::new(map, 0, Position::new(1, 1), Position::new(3, 1))
+        map.set(Position::new(3, 1), TileType::StairsDown);
+        Level::new(
+            map,
+            0,
+            Position::new(1, 1),
+            Position::new(3, 1),
+            [Position::new(1, 1)],
+        )
     }
 
     fn insert(level: &mut Level, x: usize) -> EnemyId {
@@ -290,12 +316,57 @@ mod tests {
             Position::new(0, 0),
             Position::new(5, 5),
             Position::new(1, 2),
+            Position::new(2, 2),
+            Position::new(3, 2),
         ] {
             let mut item = get_item(2);
             item.name = "Custom potion".to_owned();
             assert_eq!(level.insert_ground_item(item.clone(), position), Err(item));
         }
         assert!(level.ground_items().is_empty());
+    }
+
+    #[test]
+    fn spawn_restrictions_do_not_block_runtime_stairs_or_start_room_access() {
+        let mut level = empty_level();
+        let start = level.player_start();
+        let stairs = level.stairs_down();
+        assert!(!level.is_spawn_tile(start));
+        assert!(!level.is_spawn_tile(stairs));
+        assert!(level.is_spawn_tile(Position::new(2, 1)));
+        assert!(!level.is_spawn_tile(Position::new(usize::MAX, 0)));
+        for position in [
+            Position::new(0, 0),
+            Position::new(1, 2),
+            Position::new(2, 2),
+            Position::new(3, 2),
+        ] {
+            assert!(!level.is_spawn_tile(position));
+        }
+        let id = insert(&mut level, 3);
+        assert!(level.move_enemy(id, start));
+        assert!(level.move_enemy(id, stairs));
+        level.insert_ground_item(get_item(0), start).unwrap();
+        level.insert_ground_item(get_item(2), stairs).unwrap();
+    }
+
+    #[test]
+    fn removing_ground_entry_shifts_indices_without_losing_other_items() {
+        let mut level = empty_level();
+        let position = Position::new(2, 1);
+        for index in 0..3 {
+            level.insert_ground_item(get_item(index), position).unwrap();
+        }
+        assert_eq!(level.remove_ground_item(0).unwrap().item, get_item(0));
+        assert_eq!(
+            level
+                .ground_items_at(position)
+                .map(|(index, entry)| (index, entry.item.index))
+                .collect::<Vec<_>>(),
+            [(0, 1), (1, 2)]
+        );
+        assert_eq!(level.remove_ground_item(1).unwrap().item, get_item(2));
+        assert_eq!(level.ground_items()[0].item, get_item(1));
     }
 
     #[test]
@@ -309,7 +380,7 @@ mod tests {
         map.set(exit, TileType::StairsDown);
         map.set(Position::new(2, 1), TileType::Door { open: false });
         map.set(Position::new(1, 2), TileType::Door { open: true });
-        let level = Level::new(map, 2, start, exit);
+        let level = Level::new(map, 2, start, exit, [start]);
         assert!(level.is_walkable(start));
         assert!(level.is_walkable(exit));
         assert!(level.is_walkable(Position::new(1, 2)));

@@ -38,6 +38,27 @@ blobs, rendered as `~` (`[tiles.water]`). Water is impassable. Entire pools are
 rejected if they would seal a route or cover protected starting/entrance tiles.
 Stairs are placed after these decorations.
 
+## Entity placement
+
+`Level` owns enemies with stable, floor-local `EnemyId`s and ground items as
+existing `Item` objects paired with positions. Enemy insertion and movement require
+walkable terrain without another enemy. Staying on the current tile succeeds.
+`Game` must check the player's position before applying enemy movement; Level
+does not own the player. `is_walkable()` checks terrain only.
+
+Initial enemy and item spawns must pass `is_spawn_tile()`: only ordinary floor
+outside the entire starting room is eligible. The generator retains the first
+room's actual shape, including circular boundaries, rather than excluding a fixed
+distance around the player. Stairs and blocked terrain are excluded. Generation
+must also choose distinct initial positions across enemies and items. Population
+will be added in the next implementation phase; floors currently remain empty.
+
+These spawn restrictions do not apply during gameplay: enemies may enter the
+starting room and stairs. Dropped items may occupy any walkable tile and share
+tiles with enemies or other items. Rejected insertions return ownership unchanged.
+Ground-item indices identify current entries, not catalog items; removal shifts
+later indices, so callers must rebuild selections after a removal.
+
 ## TUI integration
 
 The application loads `Theme` and `Keybinds` before setting up the terminal. Resolve

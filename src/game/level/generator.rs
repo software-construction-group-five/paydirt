@@ -32,15 +32,22 @@ impl LevelGenerator {
     /// Builds a connected level with a safe start, and distant stairs.
     /// Game supplies the depth and RNG; generation retains no session state.
     pub fn generate_level(depth: u32, rng: &mut impl Rng) -> Level {
-        let (mut map, player_start) = generate_layout(depth, rng);
+        let (mut map, starting_room) = generate_layout(depth, rng);
+        let player_start = starting_room.center();
         let stairs_down = explore(&map, player_start).0;
         map.set(stairs_down, TileType::StairsDown);
-        Level::new(map, depth, player_start, stairs_down)
+        Level::new(
+            map,
+            depth,
+            player_start,
+            stairs_down,
+            starting_room.positions(),
+        )
     }
 }
 
 /// Carves rooms and connecting corridors; the first accepted room owns the start.
-fn generate_layout(depth: u32, rng: &mut impl Rng) -> (Map, Position) {
+fn generate_layout(depth: u32, rng: &mut impl Rng) -> (Map, Room) {
     let mut map = Map::new(MAP_WIDTH, MAP_HEIGHT);
     let mut rooms: Vec<Room> = Vec::new();
 
@@ -63,7 +70,7 @@ fn generate_layout(depth: u32, rng: &mut impl Rng) -> (Map, Position) {
     add_doors(&mut map, &rooms, rng);
     add_water(&mut map, &rooms, player_start, rng);
     add_rocks(&mut map, &rooms, player_start, rng);
-    (map, player_start)
+    (map, rooms.remove(0))
 }
 
 /// Returns the most distant floor and connected tile count with doors openable.
@@ -379,6 +386,57 @@ mod tests {
     use super::*;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
+
+    #[test]
+    fn spawn_tiles_exclude_the_whole_starting_room_for_both_shapes() {
+        for circular in [false, true] {
+            let room = Room {
+                x: 1,
+                y: 1,
+                width: 9,
+                height: 9,
+                circular,
+            };
+            let mut map = Map::new(14, 12);
+            room.carve(&mut map);
+            let nearby_corridor = Position::new(10, 5);
+            map.set(nearby_corridor, TileType::Floor);
+            let stairs = Position::new(11, 5);
+            map.set(stairs, TileType::StairsDown);
+            // A circular room's bounding-box corner is outside its actual shape.
+            let corner = Position::new(1, 1);
+            map.set(corner, TileType::Floor);
+            let level = Level::new(map, 0, room.center(), stairs, room.positions());
+            let distant_room_tile = Position::new(5, 1);
+            assert!(distant_room_tile.distance(room.center()) > 2);
+            assert!(!level.is_spawn_tile(distant_room_tile));
+            for position in room.positions() {
+                assert!(!level.is_spawn_tile(position));
+            }
+            assert_eq!(level.is_spawn_tile(corner), circular);
+            assert!(level.is_spawn_tile(nearby_corridor));
+            assert!(!level.is_spawn_tile(stairs));
+        }
+    }
+
+    #[test]
+    fn generated_levels_retain_their_starting_room_spawn_exclusion() {
+        for depth in [0, 8] {
+            for seed in 0..20 {
+                let (_, room) = generate_layout(depth, &mut StdRng::seed_from_u64(seed));
+                let level = LevelGenerator::generate_level(depth, &mut StdRng::seed_from_u64(seed));
+                for position in room.positions() {
+                    assert!(!level.is_spawn_tile(position));
+                }
+                assert!(
+                    level
+                        .get_map()
+                        .positions()
+                        .any(|position| level.is_spawn_tile(position))
+                );
+            }
+        }
+    }
 
     /// Generates levels for several depths and seeds, so circles are included.
     fn sample_levels() -> impl Iterator<Item = Level> {
