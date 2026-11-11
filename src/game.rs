@@ -17,15 +17,28 @@ pub mod screen;
 pub mod stats;
 
 use action::Action;
+use equipment::Equipment;
+use inventory::Inventory;
 use level::{Level, generator::LevelGenerator};
+use message_log::MessageLog;
+use player::Player;
 use rand::{SeedableRng, rngs::StdRng};
 use screen::Screen;
+use stats::Stats;
 
-/// Owns screen navigation and the active dungeon floor.
+// TODO(joseph): confirm starting stats with the team
+const STARTING_MAX_HP: i32 = 100;
+const STARTING_ATTACK: i32 = 15;
+const STARTING_DEFENSE: i32 = 5;
+const MESSAGE_LOG_CAPACITY: usize = 50;
+
+/// Owns screen navigation, the active dungeon floor, the player, and the message log.
 pub struct Game {
     screen: Screen,
     menu_selection: usize,
     level: Option<Level>,
+    player: Option<Player>,
+    log: MessageLog,
     rng: StdRng,
     should_quit: bool,
 }
@@ -43,6 +56,8 @@ impl Game {
             screen: Screen::MainMenu,
             menu_selection: 0,
             level: None,
+            player: None,
+            log: MessageLog::new(MESSAGE_LOG_CAPACITY),
             rng: StdRng::from_rng(&mut rand::rng()),
             should_quit: false,
         }
@@ -63,6 +78,16 @@ impl Game {
         self.level.as_ref()
     }
 
+    /// Returns the active player, absent before a session starts (Game State Access).
+    pub fn player(&self) -> Option<&Player> {
+        self.player.as_ref()
+    }
+
+    /// Returns the current session's messages (Game State Access).
+    pub fn message_log(&self) -> &MessageLog {
+        &self.log
+    }
+
     /// Reports whether the application loop should exit and restore the terminal.
     pub fn should_quit(&self) -> bool {
         self.should_quit
@@ -80,10 +105,7 @@ impl Game {
         match self.screen {
             Screen::MainMenu => match action {
                 Action::MoveUp | Action::MoveDown => self.menu_selection = 1 - self.menu_selection,
-                Action::Confirm if self.menu_selection == 0 => {
-                    self.level = Some(LevelGenerator::generate_level(0, &mut self.rng));
-                    self.screen = Screen::Playing;
-                }
+                Action::Confirm if self.menu_selection == 0 => self.initialize_game(),
                 Action::Confirm => self.should_quit = true,
                 _ => {}
             },
@@ -106,10 +128,27 @@ impl Game {
         }
     }
 
+    /// Starts a fresh session: new floor, new player at its start, empty log (Game Contract 1, InitializeGame).
+    fn initialize_game(&mut self) {
+        let level = LevelGenerator::generate_level(0, &mut self.rng);
+        let stats = Stats::new(STARTING_MAX_HP, STARTING_ATTACK, STARTING_DEFENSE);
+        self.player = Some(Player::new(
+            level.player_start(),
+            stats,
+            Inventory::new(),
+            Equipment::new(),
+        ));
+        self.level = Some(level);
+        self.log.clear();
+        self.screen = Screen::Playing;
+    }
+
     fn return_to_menu(&mut self) {
         self.screen = Screen::MainMenu;
         self.menu_selection = 0;
         self.level = None;
+        self.player = None;
+        self.log.clear();
     }
 }
 
@@ -137,6 +176,29 @@ mod tests {
         assert!(game.level().is_none());
         game.process_action(&Action::Confirm);
         assert_eq!(game.level().unwrap().depth(), 0);
+    }
+
+    #[test]
+    fn new_game_places_player_at_level_start() {
+        let mut game = Game::new();
+        assert!(game.player().is_none());
+        game.process_action(&Action::Confirm);
+        let start = game.level().unwrap().player_start();
+        assert!(game.level().unwrap().is_walkable(start));
+        let player = game.player().unwrap();
+        assert_eq!(player.get_position(), start);
+        assert_eq!(player.get_stats().hp(), STARTING_MAX_HP);
+        assert!(game.message_log().messages().is_empty());
+    }
+
+    #[test]
+    fn returning_to_menu_clears_the_session() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        game.process_action(&Action::Pause);
+        game.process_action(&Action::Back);
+        assert!(game.player().is_none());
+        assert!(game.message_log().messages().is_empty());
     }
 
     #[test]

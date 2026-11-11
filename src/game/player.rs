@@ -73,15 +73,12 @@ impl Player {
     pub fn tick_status_effects(&mut self) -> i32 {
         self.stats.tick_status_effects()
     }
-
-    // TODO(joseph): update_equipped (Contract 7, Protocol 3) once Equipment is done
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Equipment, Inventory, Player, Position, Stats, StatusEffect};
 
-    // TODO(joseph): switch to Equipment::new() once it exists
     fn player() -> Player {
         Player::new(
             Position::new(1, 1),
