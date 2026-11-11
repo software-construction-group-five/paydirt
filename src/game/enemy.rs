@@ -6,6 +6,9 @@
 //! - 14 Combat Information: attack roll
 //!
 //! Decision-making lives in `ai`; Game applies the results.
+
+pub mod ai;
+
 use crate::game::position::Position;
 use crate::game::stats::Stats;
     
