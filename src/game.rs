@@ -109,11 +109,14 @@ impl Game {
                 Action::Confirm => self.should_quit = true,
                 _ => {}
             },
-            Screen::Playing => {
-                if matches!(action, Action::Pause) {
-                    self.screen = Screen::Paused;
-                }
-            }
+            Screen::Playing => match action {
+                Action::Pause => self.screen = Screen::Paused,
+                Action::MoveUp => self.move_player(0, -1),
+                Action::MoveDown => self.move_player(0, 1),
+                Action::MoveLeft => self.move_player(-1, 0),
+                Action::MoveRight => self.move_player(1, 0),
+                _ => {}
+            },
             Screen::Inventory => {}
             Screen::Paused => match action {
                 Action::Pause | Action::Confirm => self.screen = Screen::Playing,
@@ -141,6 +144,24 @@ impl Game {
         self.level = Some(level);
         self.log.clear();
         self.screen = Screen::Playing;
+    }
+
+    /// Moves the player one tile if the target is on the map and walkable;
+    /// otherwise the player stays put (Game Contract 2, using Level Contract 9
+    /// and Player Contract 7).
+    fn move_player(&mut self, dx: isize, dy: isize) {
+        let (Some(player), Some(level)) = (self.player.as_mut(), self.level.as_ref()) else {
+            return;
+        };
+        let Some(target) = player.get_position().offset(dx, dy) else {
+            return;
+        };
+        if !level.is_walkable(target) {
+            return;
+        }
+        // TODO(joseph): once level-entities adds enemy lookup, send moves into an
+        // enemy to combat instead of moving (Level Contract 10)
+        player.set_position(target);
     }
 
     fn return_to_menu(&mut self) {
@@ -199,6 +220,62 @@ mod tests {
         game.process_action(&Action::Back);
         assert!(game.player().is_none());
         assert!(game.message_log().messages().is_empty());
+    }
+
+    #[test]
+    fn moves_only_onto_walkable_tiles() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        let start = game.player().unwrap().get_position();
+        for (action, dx, dy) in [
+            (Action::MoveUp, 0, -1),
+            (Action::MoveDown, 0, 1),
+            (Action::MoveLeft, -1, 0),
+            (Action::MoveRight, 1, 0),
+        ] {
+            game.player.as_mut().unwrap().set_position(start);
+            let expected = start
+                .offset(dx, dy)
+                .filter(|&target| game.level().unwrap().is_walkable(target))
+                .unwrap_or(start);
+            game.process_action(&action);
+            assert_eq!(game.player().unwrap().get_position(), expected);
+        }
+    }
+
+    #[test]
+    fn walking_into_a_wall_stops_the_player() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        // Rooms are enclosed, so walking left long enough always hits something solid
+        for _ in 0..100 {
+            game.process_action(&Action::MoveLeft);
+        }
+        let level = game.level().unwrap();
+        let stopped = game.player().unwrap().get_position();
+        assert!(level.is_walkable(stopped));
+        assert!(
+            stopped
+                .offset(-1, 0)
+                .is_none_or(|left| !level.is_walkable(left))
+        );
+    }
+
+    #[test]
+    fn movement_is_ignored_while_paused() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        let start = game.player().unwrap().get_position();
+        game.process_action(&Action::Pause);
+        for action in [
+            Action::MoveUp,
+            Action::MoveDown,
+            Action::MoveLeft,
+            Action::MoveRight,
+        ] {
+            game.process_action(&action);
+        }
+        assert_eq!(game.player().unwrap().get_position(), start);
     }
 
     #[test]
