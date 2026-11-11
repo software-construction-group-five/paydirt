@@ -13,9 +13,11 @@ impl Position {
         Self { x, y }
     }
 
-    /// The position shifted by (dx, dy)
-    pub fn offset(self, dx: usize, dy: usize) -> Self {
-        Self::new(self.x + dx, self.y + dy)
+    /// The position shifted by (dx, dy), or `None` if x or y would go below 0
+    pub fn offset(self, dx: isize, dy: isize) -> Option<Self> {
+        let x = self.x.checked_add_signed(dx)?;
+        let y = self.y.checked_add_signed(dy)?;
+        Some(Self::new(x, y))
     }
 
     /// Number of moves to reach `other` if diagonal moves are allowed
@@ -40,5 +42,21 @@ mod tests {
     fn distance_to_self_is_zero() {
         let a = Position::new(5, 5);
         assert_eq!(a.distance(a), 0);
+    }
+
+    #[test]
+    fn offset_moves_in_all_directions() {
+        let a = Position::new(5, 5);
+        assert_eq!(a.offset(1, 0), Some(Position::new(6, 5)));
+        assert_eq!(a.offset(-1, 0), Some(Position::new(4, 5)));
+        assert_eq!(a.offset(0, -1), Some(Position::new(5, 4)));
+        assert_eq!(a.offset(0, 1), Some(Position::new(5, 6)));
+    }
+
+    #[test]
+    fn offset_past_top_left_edge_is_none() {
+        let a = Position::new(0, 0);
+        assert_eq!(a.offset(-1, 0), None);
+        assert_eq!(a.offset(0, -1), None);
     }
 }
