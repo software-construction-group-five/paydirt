@@ -7,7 +7,7 @@ use rand::{Rng, RngExt, seq::SliceRandom};
 
 use crate::game::{
     enemy::{Enemy, EnemyType},
-    item::{Item, get_item},
+    item::{Item, catalog},
     level::{
         Level,
         map::{Map, TileType},
@@ -121,8 +121,7 @@ fn choose_enemy(depth: u32, rng: &mut impl Rng) -> EnemyType {
 fn available_items(depth: u32) -> Vec<Item> {
     // Catalog levels are one-based; dungeon depths are zero-based.
     let catalog_level = depth.saturating_add(1);
-    (0..3)
-        .map(get_item)
+    catalog()
         .filter(|item| item.level <= catalog_level)
         .collect()
 }
@@ -155,7 +154,11 @@ fn populate(level: &mut Level, rng: &mut impl Rng) {
     let items = available_items(level.depth());
 
     // Reserve item space before placing enemies so a cramped floor can supply both.
-    let reserved_items = item_count.min(candidates.len() / 2);
+    let reserved_items = if items.is_empty() {
+        0
+    } else {
+        item_count.min(candidates.len() / 2)
+    };
     let enemy_count = enemy_count.min(candidates.len() - reserved_items);
     for _ in 0..enemy_count {
         let position = candidates

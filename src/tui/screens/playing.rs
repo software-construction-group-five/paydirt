@@ -68,8 +68,8 @@ pub fn draw_level(frame: &mut Frame, area: Rect, level: &LevelView<'_>, theme: &
     frame.render_widget(Clear, inner);
     let focus = level
         .player
-        .or(level.focus)
         .filter(|&pos| level.map.in_bounds(pos))
+        .or_else(|| level.focus.filter(|&pos| level.map.in_bounds(pos)))
         .unwrap_or(Position::new(0, 0));
     let origin_x = focus
         .x
@@ -189,6 +189,70 @@ mod tests {
             theme::Glyph,
         },
     };
+
+    #[test]
+    fn camera_focus_keeps_the_start_visible_without_a_player_on_small_terminals() {
+        let mut map = Map::new(100, 30);
+        let start = Position::new(85, 25);
+        map.set(start, TileType::StairsDown);
+        map.update_visibility(start);
+        let mut level = LevelView::new(&map);
+        level.focus = Some(start);
+        // Invalid entity data must not override a valid camera focus.
+        level.player = Some(Position::new(usize::MAX, usize::MAX));
+        let view = RenderView {
+            level: Some(level),
+            ..Default::default()
+        };
+        for (width, height) in [(15, 10), (40, 20), (100, 30)] {
+            let output = text(&draw_screen(width, height, Screen::Playing, &view));
+            assert!(output.contains('>'));
+            assert!(!output.contains('@'));
+        }
+    }
+
+    #[test]
+    fn redraws_remove_hidden_entities_and_clear_a_previous_floor() {
+        use crate::tui::Renderer;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut map = Map::new(7, 3);
+        for x in 0..7 {
+            map.set(Position::new(x, 1), TileType::Floor);
+        }
+        map.set(Position::new(3, 1), TileType::Door { open: false });
+        let left = Position::new(1, 1);
+        let enemy = [MapEntity {
+            position: left,
+            glyph: Glyph::new('s'),
+        }];
+        let renderer = Renderer::default();
+        let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+        for (origin, expected) in [(left, "s"), (Position::new(5, 1), ".")] {
+            map.update_visibility(origin);
+            let mut level = LevelView::new(&map);
+            level.enemies = &enemy;
+            let view = RenderView {
+                level: Some(level),
+                ..Default::default()
+            };
+            let buffer = &terminal
+                .draw(|frame| renderer.render(frame, &Screen::Playing, &view))
+                .unwrap()
+                .buffer;
+            assert_eq!(buffer[(2, 2)].symbol(), expected);
+        }
+        let fresh_floor = Map::new(7, 3);
+        let view = RenderView {
+            level: Some(LevelView::new(&fresh_floor)),
+            ..Default::default()
+        };
+        let buffer = &terminal
+            .draw(|frame| renderer.render(frame, &Screen::Playing, &view))
+            .unwrap()
+            .buffer;
+        assert_eq!(buffer[(2, 2)].symbol(), " ");
+    }
 
     #[test]
     fn fog_hides_unseen_terrain_and_entities_but_keeps_remembered_terrain() {

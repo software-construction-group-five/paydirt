@@ -79,7 +79,8 @@ Each floor targets `4 + min(depth, 16)` enemies and
 replacement. On cramped floors, reserve up to half the available tiles for items,
 then place as many enemies and items as fit. Placement terminates with no retries.
 
-Items are chosen uniformly from eligible entries in the current three-item catalog.
+Items are chosen uniformly from eligible entries exposed by `item::catalog()`.
+The catalog currently contains Pickaxe, Leather Armor, and Health Potion.
 Catalog level one is available at dungeon depth zero; availability uses saturating
 `depth + 1`. Identical depth and RNG seed reproduce terrain and population.
 
@@ -133,3 +134,29 @@ or decide screen transitions. The launcher calls `Renderer::enemy_entities()` an
 from leaking through custom display data. Until active-player movement is connected,
 `LevelView::focus` centers the camera on the floor start without drawing a player.
 A supplied player position takes precedence over that camera focus.
+
+## Level entity integration notes
+
+These interfaces implement SDD contracts 8–11, 19, and 20. The SDD PDF describes
+older signatures; this branch uses the following concrete ownership rules:
+
+| Area | Implemented contract |
+| --- | --- |
+| Enemy identity | `EnemyId` is stable within one Level and never reused there; discard old IDs on floor replacement. |
+| Enemy access | Borrow through `enemy()`, `enemy_at()`, and `enemies()`; move through validated `move_enemy()`, remove through `remove_enemy()`. |
+| Ground items | Insert the existing Item; removal returns its owned GroundItem. Rebuild entry selections after removal shifts indices. |
+| Generation | Caller supplies depth and RNG; returned floors already contain terrain, enemies, and items. |
+| Visibility | `seen` replaces the unused `explored` tile field. Refresh current sight before rendering; entities use their tile's current visibility. |
+| Presentation | Renderer consumes borrowed views and resolves themes without changing gameplay state. |
+
+The movement feature must create and own the Player, check player/enemy collisions,
+refresh sight after movement and door interactions, and replace the launcher's
+starting-position camera fallback with the active player's position. Combat remains
+responsible for damage, death removal, and turn timing. No gameplay turns are added
+by entity display or visibility queries.
+
+Run `cargo fmt --check`, `cargo test --offline`, and
+`cargo clippy --offline --all-targets -- -D warnings` before review. In a terminal,
+check New Game, pause/resume, return to menu, restart, resize, and quit. On New Game,
+only terrain in sight is revealed; a floor may initially show no entities because
+the entire starting room is protected and closed doors block sight.

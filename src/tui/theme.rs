@@ -26,7 +26,7 @@ impl Glyph {
     }
 }
 
-/// Shared text styles and terrain glyphs; callers may customize every field.
+/// Shared text styles and terrain/entity glyphs; callers may customize every field.
 #[derive(Debug, Clone)]
 pub struct Theme {
     /// Panel borders and secondary text.
