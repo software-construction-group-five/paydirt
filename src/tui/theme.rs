@@ -5,7 +5,7 @@ use std::{fs, io, path::Path};
 use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
 
-use crate::game::level::map::TileType;
+use crate::game::{enemy::EnemyType, item::ItemType, level::map::TileType};
 
 /// One ASCII glyph and its terminal style.
 #[derive(Debug, Clone, Copy)]
@@ -53,6 +53,18 @@ pub struct Theme {
     pub stairs_down: Glyph,
     /// Default player appearance.
     pub player: Glyph,
+    /// Goblin appearance.
+    pub goblin: Glyph,
+    /// Ghost appearance.
+    pub ghost: Glyph,
+    /// Slime appearance.
+    pub slime: Glyph,
+    /// Ground weapon appearance.
+    pub weapon: Glyph,
+    /// Ground armor appearance.
+    pub armor: Glyph,
+    /// Ground consumable appearance.
+    pub consumable: Glyph,
 }
 
 impl Default for Theme {
@@ -68,6 +80,27 @@ struct ThemeConfig {
     ui: UiConfig,
     tiles: TileConfig,
     player: GlyphConfig,
+    #[serde(default)]
+    enemies: EnemyConfig,
+    #[serde(default)]
+    items: ItemConfig,
+}
+
+// Missing entity entries keep older theme files compatible.
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct EnemyConfig {
+    goblin: Option<GlyphConfig>,
+    ghost: Option<GlyphConfig>,
+    slime: Option<GlyphConfig>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ItemConfig {
+    weapon: Option<GlyphConfig>,
+    armor: Option<GlyphConfig>,
+    consumable: Option<GlyphConfig>,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +139,22 @@ fn foreground(value: &str, field: &str) -> io::Result<Style> {
         )
     })?;
     Ok(Style::default().fg(color))
+}
+
+fn entity_glyph(
+    config: Option<GlyphConfig>,
+    field: &str,
+    symbol: char,
+    color: Color,
+) -> io::Result<Glyph> {
+    config
+        .map(|config| config.resolve(field))
+        .unwrap_or_else(|| {
+            Ok(Glyph {
+                symbol,
+                style: Style::default().fg(color),
+            })
+        })
 }
 
 impl GlyphConfig {
@@ -149,7 +198,36 @@ impl Theme {
             door_closed: config.tiles.door_closed.resolve("tiles.door_closed")?,
             stairs_down: config.tiles.stairs_down.resolve("tiles.stairs_down")?,
             player: config.player.resolve("player")?,
+            goblin: entity_glyph(config.enemies.goblin, "enemies.goblin", 'g', Color::Red)?,
+            ghost: entity_glyph(config.enemies.ghost, "enemies.ghost", 'G', Color::White)?,
+            slime: entity_glyph(config.enemies.slime, "enemies.slime", 's', Color::Green)?,
+            weapon: entity_glyph(config.items.weapon, "items.weapon", ')', Color::Yellow)?,
+            armor: entity_glyph(config.items.armor, "items.armor", '[', Color::Cyan)?,
+            consumable: entity_glyph(
+                config.items.consumable,
+                "items.consumable",
+                '!',
+                Color::Magenta,
+            )?,
         })
+    }
+
+    /// Resolves an enemy species into its configured glyph.
+    pub fn enemy(&self, kind: &EnemyType) -> Glyph {
+        match kind {
+            EnemyType::Goblin => self.goblin,
+            EnemyType::Ghost => self.ghost,
+            EnemyType::Slime => self.slime,
+        }
+    }
+
+    /// Resolves a ground item's category into its configured glyph.
+    pub fn item(&self, kind: &ItemType) -> Glyph {
+        match kind {
+            ItemType::Weapon => self.weapon,
+            ItemType::Armor => self.armor,
+            ItemType::Consumable => self.consumable,
+        }
     }
 
     /// Resolves terrain into a glyph without changing the map.
@@ -169,6 +247,33 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entity_theme_entries_are_optional_and_validate_custom_appearances() {
+        let defaults = Theme::parse(CONFIG).unwrap();
+        assert_eq!(defaults.enemy(&EnemyType::Goblin).symbol, 'g');
+        assert_eq!(defaults.enemy(&EnemyType::Ghost).symbol, 'G');
+        assert_eq!(defaults.enemy(&EnemyType::Slime).symbol, 's');
+        assert_eq!(defaults.item(&ItemType::Weapon).symbol, ')');
+        assert_eq!(defaults.item(&ItemType::Armor).symbol, '[');
+        assert_eq!(defaults.item(&ItemType::Consumable).symbol, '!');
+        let custom = format!(
+            "{CONFIG}\n[enemies.slime]\nsymbol = 'S'\ncolor = '#123456'\n[items.weapon]\nsymbol = 'W'\ncolor = 'blue'\n"
+        );
+        let theme = Theme::parse(&custom).unwrap();
+        assert_eq!(theme.slime.symbol, 'S');
+        assert_eq!(theme.slime.style.fg, Some(Color::Rgb(0x12, 0x34, 0x56)));
+        assert_eq!(theme.weapon.symbol, 'W');
+        assert_eq!(theme.weapon.style.fg, Some(Color::Blue));
+        for invalid in [
+            custom.replace("'S'", "'界'"),
+            custom.replace("'blue'", "'invalid'"),
+            format!("{custom}\nbackground = 'black'"),
+            format!("{CONFIG}\n[enemies.unknown]\nsymbol = 'x'\ncolor = 'red'"),
+        ] {
+            assert!(Theme::parse(&invalid).is_err());
+        }
+    }
 
     // Use a fixed monochrome fixture so tests do not depend on the active palette.
     const CONFIG: &str = r##"
@@ -219,7 +324,8 @@ color = "reset"
         let theme = Theme::parse(&source).unwrap();
         assert_eq!(theme.accent.fg, Some(Color::Yellow));
         assert_eq!(theme.player.style.fg, Some(Color::Rgb(0x12, 0x34, 0x56)));
-        let map = Map::new(3, 3);
+        let mut map = Map::new(3, 3);
+        map.update_visibility(Position::new(1, 1));
         let mut level = LevelView::new(&map);
         level.player = Some(Position::new(1, 1));
         let view = RenderView {
@@ -270,6 +376,12 @@ color = "reset"
             theme.door_closed.style,
             theme.stairs_down.style,
             theme.player.style,
+            theme.goblin.style,
+            theme.ghost.style,
+            theme.slime.style,
+            theme.weapon.style,
+            theme.armor.style,
+            theme.consumable.style,
         ] {
             assert_eq!(style.bg, None);
         }
@@ -296,8 +408,14 @@ color = "reset"
         assert_eq!(theme.tile(TileType::Water).symbol, '~');
         assert_eq!(theme.tile(TileType::Water).style.fg, Some(Color::Blue));
         let mut map = Map::new(5, 5);
+        for y in 0..5 {
+            for x in 0..5 {
+                map.set(Position::new(x, y), TileType::Floor);
+            }
+        }
         map.set(Position::new(1, 1), TileType::Rock);
         map.set(Position::new(2, 1), TileType::Water);
+        map.update_visibility(Position::new(2, 2));
         let view = RenderView {
             level: Some(LevelView::new(&map)),
             ..Default::default()

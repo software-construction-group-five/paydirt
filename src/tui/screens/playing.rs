@@ -12,7 +12,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{Paragraph, Wrap},
+    widgets::{Clear, Paragraph, Wrap},
 };
 
 /// Draws gameplay above a full-width message log, with status beside wide maps.
@@ -64,8 +64,11 @@ pub fn draw_level(frame: &mut Frame, area: Rect, level: &LevelView<'_>, theme: &
     let block = panel(title, theme);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    // Clear the viewport so unseen tiles cannot retain glyphs from an earlier frame.
+    frame.render_widget(Clear, inner);
     let focus = level
         .player
+        .or(level.focus)
         .filter(|&pos| level.map.in_bounds(pos))
         .unwrap_or(Position::new(0, 0));
     let origin_x = focus
@@ -79,7 +82,7 @@ pub fn draw_level(frame: &mut Frame, area: Rect, level: &LevelView<'_>, theme: &
     for dy in 0..usize::from(inner.height).min(level.map.height()) {
         for dx in 0..usize::from(inner.width).min(level.map.width()) {
             let pos = Position::new(origin_x + dx, origin_y + dy);
-            if let Some(tile) = level.map.get(pos) {
+            if let Some(tile) = level.map.get(pos).filter(|tile| tile.seen) {
                 paint(
                     frame,
                     inner.x + dx as u16,
@@ -90,7 +93,7 @@ pub fn draw_level(frame: &mut Frame, area: Rect, level: &LevelView<'_>, theme: &
         }
     }
     let mut draw_entity = |pos: Position, glyph| {
-        if level.map.in_bounds(pos)
+        if level.map.is_visible(pos)
             && let (Some(x), Some(y)) = (pos.x.checked_sub(origin_x), pos.y.checked_sub(origin_y))
             && x < usize::from(inner.width)
             && y < usize::from(inner.height)
@@ -188,10 +191,59 @@ mod tests {
     };
 
     #[test]
+    fn fog_hides_unseen_terrain_and_entities_but_keeps_remembered_terrain() {
+        let mut map = Map::new(7, 3);
+        for x in 0..7 {
+            map.set(Position::new(x, 1), TileType::Floor);
+        }
+        map.set(Position::new(3, 1), TileType::Door { open: false });
+        let left = Position::new(1, 1);
+        let right = Position::new(5, 1);
+        let items = [MapEntity {
+            position: left,
+            glyph: Glyph::new('!'),
+        }];
+        let enemies = [MapEntity {
+            position: right,
+            glyph: Glyph::new('s'),
+        }];
+        map.update_visibility(left);
+        {
+            let mut level = LevelView::new(&map);
+            level.items = &items;
+            level.enemies = &enemies;
+            let view = RenderView {
+                level: Some(level),
+                ..Default::default()
+            };
+            let buffer = draw_screen(20, 10, Screen::Playing, &view);
+            assert_eq!(buffer[(2, 2)].symbol(), "!");
+            assert_eq!(buffer[(4, 2)].symbol(), "+");
+            assert_eq!(buffer[(6, 2)].symbol(), " ");
+        }
+        map.update_visibility(right);
+        let mut level = LevelView::new(&map);
+        level.items = &items;
+        level.enemies = &enemies;
+        let view = RenderView {
+            level: Some(level),
+            ..Default::default()
+        };
+        for screen in [Screen::Playing, Screen::Paused] {
+            let buffer = draw_screen(40, 20, screen, &view);
+            assert_eq!(buffer[(2, 2)].symbol(), ".");
+            assert_eq!(buffer[(6, 2)].symbol(), "s");
+        }
+        assert!(map.get(left).unwrap().seen);
+        assert!(!map.get(left).unwrap().visible);
+    }
+
+    #[test]
     fn entity_layers_override_terrain_and_reject_out_of_bounds_positions() {
         let mut map = Map::new(4, 3);
         let position = Position::new(1, 1);
         map.set(position, TileType::Floor);
+        map.update_visibility(position);
         let items = [MapEntity {
             position,
             glyph: Glyph::new('!'),
@@ -229,13 +281,14 @@ mod tests {
 
     #[test]
     fn viewport_keeps_player_visible_at_each_map_corner() {
-        let map = Map::new(100, 100);
+        let mut map = Map::new(100, 100);
         for position in [
             Position::new(0, 0),
             Position::new(99, 0),
             Position::new(0, 99),
             Position::new(99, 99),
         ] {
+            map.update_visibility(position);
             let mut level = LevelView::new(&map);
             level.player = Some(position);
             let view = RenderView {

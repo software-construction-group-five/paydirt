@@ -5,7 +5,8 @@
 //! eventual storage or accessors. Input and terminal lifecycle belong to callers.
 //!
 //! Pass the current screen and available state to the renderer inside the caller's
-//! terminal draw callback. Empty slices leave space for future entity systems.
+//! terminal draw callback. Entity builders resolve visible level populations through
+//! the renderer theme; drawing also enforces tile visibility.
 //!
 //! ```
 //! use paydirt::{game::{level::map::Map, screen::Screen}, tui::{LevelView, RenderView, Renderer}};
@@ -23,7 +24,11 @@ pub mod input;
 pub mod screens;
 pub mod theme;
 
-use crate::game::{level::map::Map, position::Position, screen::Screen};
+use crate::game::{
+    level::{Level, map::Map},
+    position::Position,
+    screen::Screen,
+};
 use ratatui::{Frame, widgets::Block};
 use theme::{Glyph, Theme};
 
@@ -48,6 +53,8 @@ pub struct LevelView<'a> {
     pub enemies: &'a [MapEntity],
     /// Player location; also controls the viewport center.
     pub player: Option<Position>,
+    /// Camera focus when a player position is not yet supplied.
+    pub focus: Option<Position>,
 }
 
 impl<'a> LevelView<'a> {
@@ -59,6 +66,7 @@ impl<'a> LevelView<'a> {
             items: &[],
             enemies: &[],
             player: None,
+            focus: None,
         }
     }
 }
@@ -119,6 +127,28 @@ impl Renderer {
         Self { theme }
     }
 
+    /// Builds display entries for enemies currently in sight, without changing state.
+    pub fn enemy_entities(&self, level: &Level) -> Vec<MapEntity> {
+        level
+            .visible_enemies()
+            .map(|(_, enemy)| MapEntity {
+                position: *enemy.position(),
+                glyph: self.theme.enemy(enemy.kind()),
+            })
+            .collect()
+    }
+
+    /// Builds display entries for ground items currently in sight, in storage order.
+    pub fn item_entities(&self, level: &Level) -> Vec<MapEntity> {
+        level
+            .visible_ground_items()
+            .map(|(_, entry)| MapEntity {
+                position: entry.position,
+                glyph: self.theme.item(&entry.item.kind),
+            })
+            .collect()
+    }
+
     /// Draws one frame without mutating gameplay or reading terminal events.
     pub fn render(&self, frame: &mut Frame, screen: &Screen, view: &RenderView<'_>) {
         frame.render_widget(
@@ -143,6 +173,60 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     use super::*;
+
+    #[test]
+    fn generated_populations_reach_the_renderer_with_custom_glyphs_and_visibility() {
+        use crate::game::level::generator::LevelGenerator;
+        use rand::{SeedableRng, rngs::StdRng};
+        use ratatui::style::Color;
+
+        let mut level = LevelGenerator::generate_level(8, &mut StdRng::seed_from_u64(42));
+        let mut theme = Theme::default();
+        for glyph in [&mut theme.goblin, &mut theme.ghost, &mut theme.slime] {
+            glyph.symbol = 'E';
+            glyph.style = ratatui::style::Style::default().fg(Color::Red);
+        }
+        for glyph in [&mut theme.weapon, &mut theme.armor, &mut theme.consumable] {
+            glyph.symbol = 'I';
+            glyph.style = ratatui::style::Style::default().fg(Color::Cyan);
+        }
+        let renderer = Renderer::new(theme);
+        assert!(renderer.enemy_entities(&level).is_empty());
+        assert!(renderer.item_entities(&level).is_empty());
+        let positions: Vec<_> = level
+            .enemies()
+            .map(|(_, enemy)| *enemy.position())
+            .chain(level.ground_items().iter().map(|entry| entry.position))
+            .collect();
+        assert!(!positions.is_empty());
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        for position in positions {
+            level.update_visibility(position);
+            let enemies = renderer.enemy_entities(&level);
+            let items = renderer.item_entities(&level);
+            assert_eq!(enemies.len(), level.visible_enemies().count());
+            assert_eq!(items.len(), level.visible_ground_items().count());
+            let mut view = LevelView::new(level.get_map());
+            view.enemies = &enemies;
+            view.items = &items;
+            let view = RenderView {
+                level: Some(view),
+                ..Default::default()
+            };
+            let buffer = &terminal
+                .draw(|frame| renderer.render(frame, &Screen::Playing, &view))
+                .unwrap()
+                .buffer;
+            for entity in enemies.iter().chain(&items) {
+                let cell = &buffer[(
+                    (entity.position.x + 1) as u16,
+                    (entity.position.y + 1) as u16,
+                )];
+                assert_eq!(cell.symbol(), entity.glyph.symbol.to_string());
+                assert_eq!(cell.fg, entity.glyph.style.fg.unwrap());
+            }
+        }
+    }
 
     pub(super) fn draw_screen(
         width: u16,

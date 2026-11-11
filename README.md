@@ -8,6 +8,12 @@ Characters and foreground colors are defined in `config/theme.toml`. The TUI
 provides `Theme::load(path)` to read it. Backgrounds always use the terminal
 default. Rocks use dark gray and water uses blue.
 
+Entity settings use `[enemies.goblin]`, `[enemies.ghost]`, `[enemies.slime]`,
+`[items.weapon]`, `[items.armor]`, and `[items.consumable]`, each with `symbol` and
+`color`. Missing entity entries use defaults, so existing themes remain valid.
+Default glyphs are `g` (red Goblin), `G` (white Ghost), `s` (green Slime),
+`)` (yellow weapon), `[` (cyan armor), and `!` (magenta consumable).
+
 `cargo run` opens the main menu. Select New Game to generate and display a floor.
 Esc pauses, Esc or Enter resumes, and m returns to the main menu. The launcher
 loads both configuration files relative to the project root.
@@ -51,7 +57,7 @@ outside the entire starting room is eligible. The generator retains the first
 room's actual shape, including circular boundaries, rather than excluding a fixed
 distance around the player. Stairs and blocked terrain are excluded. Generation
 chooses distinct initial positions across enemies and items using the supplied RNG.
-Populations are stored in Level; drawing them is the next implementation phase.
+Populations are stored in Level and rendered when their tiles are in current sight.
 
 ### Population tuning
 
@@ -103,9 +109,11 @@ current tile's visibility. Remembered terrain does not reveal entities outside
 current sight. Ground-item filtering preserves storage indices for selection.
 Full collections remain available for simulation independently of visibility.
 
-Phase 4 rendering must hide unseen terrain, retain seen terrain, and draw only
-currently visible entities. The existing renderer still displays the full map;
-this backend change supplies the state and queries for that integration.
+The renderer leaves unseen terrain blank, retains seen terrain with its configured
+appearance, and draws entities only on currently visible tiles. It applies these
+rules on both gameplay and paused screens and does not update exploration itself.
+Items render below enemies, and the player renders last when supplied. Multiple
+items on one tile render in storage order, with the last item on top.
 
 ## TUI integration
 
@@ -119,5 +127,9 @@ Inside the application loop:
 - The game controller processes that action and provides updated display data.
 
 The TUI does not construct levels, move players, validate movement, advance turns,
-or decide screen transitions. Optional entity slices in `LevelView` provide
-rendering hooks for enemies and floor items as those systems are implemented.
+or decide screen transitions. The launcher calls `Renderer::enemy_entities()` and
+`item_entities()` to build visible, themed entries and borrows those vectors in
+`LevelView`. The renderer also checks tile visibility to prevent hidden entities
+from leaking through custom display data. Until active-player movement is connected,
+`LevelView::focus` centers the camera on the floor start without drawing a player.
+A supplied player position takes precedence over that camera focus.

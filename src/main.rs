@@ -38,9 +38,20 @@ fn run(terminal: &mut DefaultTerminal, renderer: &Renderer, keybinds: &Keybinds)
     let mut game = Game::new();
     while !game.should_quit() {
         let help = keybinds.help(game.screen());
+        let enemies = game
+            .level()
+            .map(|level| renderer.enemy_entities(level))
+            .unwrap_or_default();
+        let items = game
+            .level()
+            .map(|level| renderer.item_entities(level))
+            .unwrap_or_default();
         let level = game.level().map(|level| {
             let mut view = LevelView::new(level.get_map());
             view.depth = Some(level.depth());
+            view.enemies = &enemies;
+            view.items = &items;
+            view.focus = Some(level.player_start());
             view
         });
         let view = RenderView {
