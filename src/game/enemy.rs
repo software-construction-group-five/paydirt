@@ -16,7 +16,7 @@ pub struct Enemy {
     position: Position,
     stats: Stats,
     ai: AiState,
-    flee_below_hp: i32,
+    flee_below_hp: i32,//non inclusive. aka if it is set to 10 flees at 9 and below
 }
 
 /// Enemy species. Each maps to an AiProfile that drives divergent behavior.
@@ -69,6 +69,7 @@ impl Enemy{
     pub fn position(&self) -> &Position { &self.position }
     pub fn stats(&self) -> &Stats { &self.stats }
     pub fn ai(&self) -> &AiState { &self.ai}
+    pub fn get_hp(&self) -> i32 {self.stats.hp()}
 
 
     // - 13 Enemy Update: update position and AI state
@@ -107,7 +108,8 @@ impl Enemy{
 //Test Suggestions
 #[cfg(test)]
 mod tests {
-    use super::{Enemy, EnemyType, AiState};
+    use std::assert_matches;
+    use super::{Enemy, EnemyType, Position, AiState};
     //Test that get_roll returns the attack value from stats
     #[test]
     fn get_roll_returns_correct_attack() {
@@ -117,8 +119,16 @@ mod tests {
     //Test that update_status changes ai Attacking 
     #[test]
     fn update_status_changes_to_attacking() {
-        let a = Enemy::new(EnemyType::Goblin, Position::new(4,3));
+        let mut a = Enemy::new(EnemyType::Goblin, Position::new(4,3));
         a.update_status();
-        assert_eq!(a.ai(), AiState::Attacking);
+        assert_matches!(a.ai(), AiState::Attacking);
+    }
+    //Test that take damage bellow a certain level runs update_status which then changes ai to Fleeing 
+    #[test]
+    fn take_damage_and_update_status_changes_to_fleeing() {
+        let mut a = Enemy::new(EnemyType::Goblin, Position::new(4,3));
+        a.take_damage(-16);//25-16=9 which is when Goblin should first begin to flee
+        assert_eq!(a.get_hp(),9);//check hp correctly updated
+        assert_matches!(a.ai(), AiState::Fleeing);//check ai state correctly updated
     }
 }
