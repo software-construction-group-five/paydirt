@@ -94,6 +94,33 @@ impl Level {
     }
 
     ////////////////////////////////////////////////////////////////////////////////
+    // PLAYER VISIBILITY
+    ////////////////////////////////////////////////////////////////////////////////
+
+    /// Refreshes tile visibility from the player while retaining seen terrain.
+    /// Game calls this on floor entry, movement, and sight-blocking terrain changes.
+    /// Invalid positions clear current sight and return false without losing memory.
+    pub fn update_visibility(&mut self, player_position: Position) -> bool {
+        self.map.update_visibility(player_position)
+    }
+
+    /// Returns currently visible enemies, using their current tile's visibility.
+    /// Seen terrain alone does not reveal entities; IDs remain floor-local.
+    pub fn visible_enemies(&self) -> impl Iterator<Item = (EnemyId, &Enemy)> {
+        self.enemies()
+            .filter(|(_, enemy)| self.map.is_visible(*enemy.position()))
+    }
+
+    /// Returns currently visible ground items with their original storage indices.
+    /// Filtering never changes indices used to select or remove an item.
+    pub fn visible_ground_items(&self) -> impl Iterator<Item = (usize, &GroundItem)> {
+        self.ground_items
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| self.map.is_visible(entry.position))
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
     // SPAWN ELIGIBILITY
     ////////////////////////////////////////////////////////////////////////////////
 
@@ -210,6 +237,64 @@ mod tests {
     use super::*;
     use crate::game::{enemy::EnemyType, item::get_item};
     use map::TileType;
+
+    #[test]
+    fn entity_visibility_follows_current_tiles_and_preserves_item_indices() {
+        let mut map = Map::new(7, 3);
+        for x in 0..7 {
+            map.set(Position::new(x, 1), TileType::Floor);
+        }
+        let door = Position::new(3, 1);
+        map.set(door, TileType::Door { open: false });
+        let start = Position::new(1, 1);
+        let hidden = Position::new(5, 1);
+        let mut level = Level::new(map, 0, start, Position::new(6, 1), [start]);
+        let visible_enemy = level
+            .insert_enemy(Enemy::new(EnemyType::Slime, start))
+            .ok()
+            .unwrap();
+        let hidden_enemy = level
+            .insert_enemy(Enemy::new(EnemyType::Ghost, hidden))
+            .ok()
+            .unwrap();
+        level.insert_ground_item(get_item(0), hidden).unwrap();
+        level.insert_ground_item(get_item(2), start).unwrap();
+        assert_eq!(level.visible_enemies().count(), 0);
+        level.update_visibility(start);
+        assert_eq!(
+            level
+                .visible_enemies()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            [visible_enemy]
+        );
+        assert_eq!(
+            level
+                .visible_ground_items()
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>(),
+            [1]
+        );
+        // Entities moving out of sight disappear immediately without caching visibility.
+        assert!(level.move_enemy(visible_enemy, Position::new(4, 1)));
+        assert_eq!(level.visible_enemies().count(), 0);
+        level.update_visibility(hidden);
+        assert!(level.get_map().get(start).unwrap().seen);
+        assert!(!level.get_map().is_visible(start));
+        assert_eq!(level.visible_enemies().count(), 2);
+        assert!(level.visible_enemies().any(|(id, _)| id == hidden_enemy));
+        assert_eq!(
+            level
+                .visible_ground_items()
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>(),
+            [0]
+        );
+        assert_eq!(level.ground_items().len(), 2);
+        level.map.set(door, TileType::Door { open: true });
+        level.update_visibility(start);
+        assert_eq!(level.visible_ground_items().count(), 2);
+    }
 
     fn empty_level() -> Level {
         let mut map = Map::new(5, 5);

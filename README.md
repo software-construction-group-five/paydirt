@@ -83,6 +83,30 @@ tiles with enemies or other items. Rejected insertions return ownership unchange
 Ground-item indices identify current entries, not catalog items; removal shifts
 later indices, so callers must rebuild selections after a removal.
 
+## Line of sight and fog of war
+
+Each `Tile` owns `seen` (persistent exploration memory) and `visible` (current
+line of sight), both initially false. `seen` replaces the unused `explored` field.
+The launcher-facing Game controller initializes sight at the player start on New
+Game. Call `Level::update_visibility(player_position)` after movement, floor entry,
+or sight-blocking terrain changes. Updating sight spends no turn and never clears
+previously seen tiles. Invalid origins clear current visibility but preserve memory.
+
+Sight has no distance limit. Walls, rocks, and closed doors block sight; water,
+floor, stairs, and open doors transmit it. The first opaque tile remains visible.
+Straight rays cannot pass diagonally through blocked corners. Entities do not
+block sight. `Map::has_line_of_sight(origin, target)` queries geometry without
+changing memory; `Map::is_visible(position)` reads the last visibility update.
+
+`Level::visible_enemies()` and `visible_ground_items()` filter entities using their
+current tile's visibility. Remembered terrain does not reveal entities outside
+current sight. Ground-item filtering preserves storage indices for selection.
+Full collections remain available for simulation independently of visibility.
+
+Phase 4 rendering must hide unseen terrain, retain seen terrain, and draw only
+currently visible entities. The existing renderer still displays the full map;
+this backend change supplies the state and queries for that integration.
+
 ## TUI integration
 
 The application loads `Theme` and `Keybinds` before setting up the terminal. Resolve

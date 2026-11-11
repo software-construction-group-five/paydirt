@@ -38,7 +38,7 @@ pub struct MapEntity {
 
 /// Read-only map and optional entities, rendered in terrain/item/enemy/player order.
 pub struct LevelView<'a> {
-    /// Terrain to display; explored flags are not interpreted until visibility exists.
+    /// Terrain to display; fog rendering must use each tile's seen/visible flags.
     pub map: &'a Map,
     /// Current dungeon depth, if known.
     pub depth: Option<u32>,
