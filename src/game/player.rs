@@ -81,12 +81,12 @@ impl Player {
 mod tests {
     use super::{Equipment, Inventory, Player, Position, Stats, StatusEffect};
 
-    // TODO(joseph): switch to Inventory::new() and Equipment::new() once they exist
+    // TODO(joseph): switch to Equipment::new() once it exists
     fn player() -> Player {
         Player::new(
             Position::new(1, 1),
             Stats::new(100, 15, 5),
-            Inventory {},
+            Inventory::new(),
             Equipment {},
         )
     }
