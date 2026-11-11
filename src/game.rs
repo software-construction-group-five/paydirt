@@ -81,7 +81,9 @@ impl Game {
             Screen::MainMenu => match action {
                 Action::MoveUp | Action::MoveDown => self.menu_selection = 1 - self.menu_selection,
                 Action::Confirm if self.menu_selection == 0 => {
-                    self.level = Some(LevelGenerator::generate_level(0, &mut self.rng));
+                    let mut level = LevelGenerator::generate_level(0, &mut self.rng);
+                    level.update_visibility(level.player_start());
+                    self.level = Some(level);
                     self.screen = Screen::Playing;
                 }
                 Action::Confirm => self.should_quit = true,
@@ -125,6 +127,8 @@ mod tests {
         game.process_action(&Action::Confirm);
         assert!(matches!(game.screen(), Screen::Playing));
         let start = game.level().unwrap().player_start();
+        assert!(game.level().unwrap().get_map().is_visible(start));
+        assert!(game.level().unwrap().get_map().get(start).unwrap().seen);
         game.process_action(&Action::Pause);
         assert!(matches!(game.screen(), Screen::Paused));
         game.process_action(&Action::Confirm);
