@@ -2,15 +2,15 @@
 //!
 //! This module only proposes behavior. Game validates moves against Level,
 //! applies state changes and attacks, and advances the gameplay turn.
-//! Range and fleeing rules are supplied by the caller until team-approved
-//! per-species profiles are available.
+//! The per-species defaults below are proposed gameplay rules for team review.
+//! The caller provides a profile so AI can be tested independently of Game.
 
-use crate::game::enemy::{AiState, Enemy};
+use crate::game::enemy::{AiState, Enemy, EnemyType};
 use crate::game::position::Position;
 
 /// Configurable behavior limits for an enemy species.
 ///
-/// The health threshold must agree with the Enemy species definition.
+/// Flee thresholds mirror the existing values in `Enemy::new`.
 #[derive(Debug, Clone, Copy)]
 pub struct AiProfile {
     /// Largest player distance at which the enemy responds.
@@ -19,6 +19,36 @@ pub struct AiProfile {
     pub attack_range: usize,
     /// The enemy flees when its HP is strictly below this value.
     pub flee_below_hp: i32,
+}
+
+impl AiProfile {
+    /// Proposed per-species rules for SDD Contract 13 (Enemy Update).
+    ///
+    /// Goblins detect at five tiles, ghosts at six, and slimes at three.
+    /// Attack range is one tile for all species. `Position::distance`
+    /// permits diagonal attacks, while movement proposals are cardinal.
+    ///
+    /// Fleeing thresholds must remain synchronized with `Enemy::new`
+    /// until the team exposes a single shared source for these values.
+    pub fn for_enemy(enemy: &Enemy) -> Self {
+        match enemy.kind() {
+            EnemyType::Goblin => Self {
+                detection_range: 5,
+                attack_range: 1,
+                flee_below_hp: 10,
+            },
+            EnemyType::Ghost => Self {
+                detection_range: 6,
+                attack_range: 1,
+                flee_below_hp: 5,
+            },
+            EnemyType::Slime => Self {
+                detection_range: 3,
+                attack_range: 1,
+                flee_below_hp: 0,
+            },
+        }
+    }
 }
 
 /// An action the AI requests; Game decides whether it can happen.
@@ -112,12 +142,7 @@ mod tests {
     }
 
     fn profile() -> AiProfile {
-        // Test configuration; species-wide ranges are not yet finalized.
-        AiProfile {
-            detection_range: 4,
-            attack_range: 1,
-            flee_below_hp: 10,
-        }
+        AiProfile::for_enemy(&goblin())
     }
 
     #[test]
@@ -182,9 +207,7 @@ mod tests {
     fn slime_does_not_flee_at_one_hp() {
         let mut enemy = Enemy::new(EnemyType::Slime, Position::new(3, 3));
         enemy.take_damage(-4);
-        let mut config = profile();
-        config.flee_below_hp = 0;
-        let (state, intent) = decide(&enemy, Position::new(4, 3), config);
+        let (state, intent) = decide(&enemy, Position::new(4, 3), AiProfile::for_enemy(&enemy));
         assert!(matches!(state, AiState::Attacking));
         assert_eq!(intent, Intent::Attack);
     }
@@ -196,5 +219,69 @@ mod tests {
         let (state, intent) = decide(&enemy, Position::new(0, 1), profile());
         assert!(matches!(state, AiState::Fleeing));
         assert_eq!(intent, Intent::Move(Position::new(1, 0)));
+    }
+
+    #[test]
+    fn species_profiles_have_agreed_detection_and_flee_values() {
+        let goblin_profile = AiProfile::for_enemy(&goblin());
+        assert_eq!(goblin_profile.detection_range, 5);
+        assert_eq!(goblin_profile.attack_range, 1);
+        assert_eq!(goblin_profile.flee_below_hp, 10);
+
+        let ghost = Enemy::new(EnemyType::Ghost, Position::new(3, 3));
+        let ghost_profile = AiProfile::for_enemy(&ghost);
+        assert_eq!(ghost_profile.detection_range, 6);
+        assert_eq!(ghost_profile.attack_range, 1);
+        assert_eq!(ghost_profile.flee_below_hp, 5);
+
+        let slime = Enemy::new(EnemyType::Slime, Position::new(3, 3));
+        let slime_profile = AiProfile::for_enemy(&slime);
+        assert_eq!(slime_profile.detection_range, 3);
+        assert_eq!(slime_profile.attack_range, 1);
+        assert_eq!(slime_profile.flee_below_hp, 0);
+    }
+
+    #[test]
+    fn enemy_detects_player_exactly_at_range_limit() {
+        let enemy = goblin();
+        let (state, intent) = decide(
+            &enemy,
+            Position::new(8, 3), // Five tiles away, exactly at detection range.
+            AiProfile::for_enemy(&enemy),
+        );
+        assert!(matches!(state, AiState::Attacking));
+        assert_eq!(intent, Intent::Move(Position::new(4, 3)));
+    }
+
+    #[test]
+    fn diagonal_adjacent_player_is_in_attack_range() {
+        let enemy = goblin();
+        let (state, intent) = decide(&enemy, Position::new(4, 4), AiProfile::for_enemy(&enemy));
+        assert!(matches!(state, AiState::Attacking));
+        assert_eq!(intent, Intent::Attack);
+    }
+
+    #[test]
+    fn enemy_does_not_flee_at_exact_threshold() {
+        let mut enemy = goblin();
+        enemy.take_damage(-15); // 25 -> 10 HP: threshold is strictly below 10.
+        let (state, intent) = decide(&enemy, Position::new(4, 3), AiProfile::for_enemy(&enemy));
+        assert!(matches!(state, AiState::Attacking));
+        assert_eq!(intent, Intent::Attack);
+    }
+
+    #[test]
+    fn same_distance_can_be_detected_by_ghost_but_not_slime() {
+        let ghost = Enemy::new(EnemyType::Ghost, Position::new(3, 3));
+        let slime = Enemy::new(EnemyType::Slime, Position::new(3, 3));
+        let player_pos = Position::new(8, 3); // Five tiles away.
+
+        let (ghost_state, ghost_intent) = decide(&ghost, player_pos, AiProfile::for_enemy(&ghost));
+        assert!(matches!(ghost_state, AiState::Attacking));
+        assert_eq!(ghost_intent, Intent::Move(Position::new(4, 3)));
+
+        let (slime_state, slime_intent) = decide(&slime, player_pos, AiProfile::for_enemy(&slime));
+        assert!(matches!(slime_state, AiState::Idle));
+        assert_eq!(slime_intent, Intent::Wait);
     }
 }
