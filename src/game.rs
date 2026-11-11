@@ -16,7 +16,7 @@ pub mod position;
 pub mod screen;
 pub mod stats;
 
-use action::Action;
+use action::{Action, TurnResult};
 use equipment::Equipment;
 use inventory::Inventory;
 use level::{Level, generator::LevelGenerator};
@@ -93,14 +93,15 @@ impl Game {
         self.should_quit
     }
 
-    /// Processes menu and pause navigation.
-    pub fn process_action(&mut self, action: &Action) {
+    /// Processes menu, pause, and movement actions, and reports whether a
+    /// gameplay turn was spent (Game Contract 2).
+    pub fn process_action(&mut self, action: &Action) -> TurnResult {
         if self.should_quit {
-            return;
+            return TurnResult::NotSpent;
         }
         if matches!(action, Action::Quit) {
             self.should_quit = true;
-            return;
+            return TurnResult::NotSpent;
         }
         match self.screen {
             Screen::MainMenu => match action {
@@ -109,12 +110,13 @@ impl Game {
                 Action::Confirm => self.should_quit = true,
                 _ => {}
             },
-            Screen::Playing => match action {
+                Screen::Playing => match action {
                 Action::Pause => self.screen = Screen::Paused,
-                Action::MoveUp => self.move_player(0, -1),
-                Action::MoveDown => self.move_player(0, 1),
-                Action::MoveLeft => self.move_player(-1, 0),
-                Action::MoveRight => self.move_player(1, 0),
+                Action::MoveUp => return self.move_player(0, -1),
+                Action::MoveDown => return self.move_player(0, 1),
+                Action::MoveLeft => return self.move_player(-1, 0),
+                Action::MoveRight => return self.move_player(1, 0),
+                Action::Wait => return TurnResult::Spent,
                 _ => {}
             },
             Screen::Inventory => {}
@@ -123,12 +125,13 @@ impl Game {
                 Action::Back => self.return_to_menu(),
                 _ => {}
             },
-            Screen::GameOver => {
+                        Screen::GameOver => {
                 if matches!(action, Action::Confirm | Action::Back) {
                     self.return_to_menu();
                 }
             }
         }
+        TurnResult::NotSpent
     }
 
     /// Starts a fresh session: new floor, new player at its start, empty log (Game Contract 1, InitializeGame).
@@ -148,20 +151,21 @@ impl Game {
 
     /// Moves the player one tile if the target is on the map and walkable;
     /// otherwise the player stays put (Game Contract 2, using Level Contract 9
-    /// and Player Contract 7).
-    fn move_player(&mut self, dx: isize, dy: isize) {
+    /// and Player Contract 7). Always spends the turn, even when blocked.
+    fn move_player(&mut self, dx: isize, dy: isize) -> TurnResult {
         let (Some(player), Some(level)) = (self.player.as_mut(), self.level.as_ref()) else {
-            return;
+            return TurnResult::Spent;
         };
         let Some(target) = player.get_position().offset(dx, dy) else {
-            return;
+            return TurnResult::Spent;
         };
         if !level.is_walkable(target) {
-            return;
+            return TurnResult::Spent;
         }
         // TODO(joseph): once level-entities adds enemy lookup, send moves into an
         // enemy to combat instead of moving (Level Contract 10)
         player.set_position(target);
+        TurnResult::Spent
     }
 
     fn return_to_menu(&mut self) {
@@ -276,6 +280,27 @@ mod tests {
             game.process_action(&action);
         }
         assert_eq!(game.player().unwrap().get_position(), start);
+    }
+
+    #[test]
+    fn moves_and_waits_spend_a_turn_even_when_blocked() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        for _ in 0..100 {
+            assert_eq!(game.process_action(&Action::MoveLeft), TurnResult::Spent);
+        }
+        assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
+    }
+
+    #[test]
+    fn menus_and_pausing_do_not_spend_a_turn() {
+        let mut game = Game::new();
+        assert_eq!(game.process_action(&Action::MoveDown), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::MoveUp), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::Confirm), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::Pause), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::MoveLeft), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::Pause), TurnResult::NotSpent);
     }
 
     #[test]

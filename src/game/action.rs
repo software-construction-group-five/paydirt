@@ -15,3 +15,13 @@ pub enum Action {
     Back,
     Quit,
 }
+
+/// Whether an action used up a gameplay turn (Game Contract 2).
+///
+/// Moves and waits always spend a turn, even when the move is blocked.
+/// Menus, pausing, and redraws never do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnResult {
+    Spent,
+    NotSpent,
+}
