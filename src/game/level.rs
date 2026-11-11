@@ -1,19 +1,36 @@
 //! The current dungeon floor (SDD 3.4).
 //!
-//! Level owns terrain and navigation anchors.
+//! Level owns terrain, navigation anchors, enemies, and ground items.
 
 pub mod generator;
 pub mod map;
 
-use crate::game::position::Position;
+use std::collections::BTreeMap;
+
+use crate::game::{enemy::Enemy, item::Item, position::Position};
 use map::Map;
 
-/// One generated dungeon floor, including navigation anchors.
+/// Stable enemy identity within one Level. IDs are never reused on that floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EnemyId(u64);
+
+/// An owned item and its location on the floor, separate from carried items.
+pub struct GroundItem {
+    /// The actual item transferred when picked up or dropped.
+    pub item: Item,
+    /// The map tile holding the item.
+    pub position: Position,
+}
+
+/// One generated dungeon floor, including navigation anchors and entity storage.
 pub struct Level {
     map: Map,
     depth: u32,
     player_start: Position,
     stairs_down: Position,
+    enemies: BTreeMap<EnemyId, Enemy>,
+    next_enemy_id: Option<u64>,
+    ground_items: Vec<GroundItem>,
 }
 
 impl Level {
@@ -25,6 +42,9 @@ impl Level {
             depth,
             player_start,
             stairs_down,
+            enemies: BTreeMap::new(),
+            next_enemy_id: Some(0),
+            ground_items: Vec::new(),
         }
     }
 
@@ -52,12 +72,231 @@ impl Level {
     pub fn stairs_down(&self) -> Position {
         self.stairs_down
     }
+
+    /// Iterates enemies in insertion-ID order without allowing unchecked movement.
+    pub fn enemies(&self) -> impl Iterator<Item = (EnemyId, &Enemy)> {
+        self.enemies.iter().map(|(&id, enemy)| (id, enemy))
+    }
+
+    /// Looks up an enemy by its floor-local ID; removed or unknown IDs are absent.
+    pub fn enemy(&self, id: EnemyId) -> Option<&Enemy> {
+        self.enemies.get(&id)
+    }
+
+    /// Finds the enemy occupying a tile, independently of terrain walkability.
+    pub fn enemy_at(&self, position: Position) -> Option<EnemyId> {
+        self.enemies()
+            .find(|(_, enemy)| *enemy.position() == position)
+            .map(|(id, _)| id)
+    }
+
+    /// Inserts an enemy on walkable, unoccupied terrain and assigns a fresh ID.
+    /// Returns ownership on rejection, including ID exhaustion. Game checks player
+    /// occupancy; generation applies start-area and stairs restrictions separately.
+    pub fn insert_enemy(&mut self, enemy: Enemy) -> Result<EnemyId, Enemy> {
+        let position = *enemy.position();
+        if !self.is_walkable(position) || self.enemy_at(position).is_some() {
+            return Err(enemy);
+        }
+        let Some(next) = self.next_enemy_id else {
+            return Err(enemy);
+        };
+        let id = EnemyId(next);
+        self.next_enemy_id = next.checked_add(1);
+        self.enemies.insert(id, enemy);
+        Ok(id)
+    }
+
+    /// Moves a known enemy to walkable terrain free of other enemies.
+    /// Staying on its current tile succeeds. Rejection leaves all state unchanged;
+    /// Game must check the player position before requesting movement.
+    pub fn move_enemy(&mut self, id: EnemyId, position: Position) -> bool {
+        if !self.is_walkable(position) || self.enemy_at(position).is_some_and(|other| other != id) {
+            return false;
+        }
+        let Some(enemy) = self.enemies.get_mut(&id) else {
+            return false;
+        };
+        enemy.update_position(position);
+        true
+    }
+
+    /// Removes and returns an enemy without changing any other enemy's ID.
+    pub fn remove_enemy(&mut self, id: EnemyId) -> Option<Enemy> {
+        self.enemies.remove(&id)
+    }
+
+    /// Borrows ground entries in insertion order. Indices change after removal.
+    pub fn ground_items(&self) -> &[GroundItem] {
+        &self.ground_items
+    }
+
+    /// Finds ground entries at a tile, with indices usable for immediate removal.
+    /// Multiple items may share a tile, including a tile occupied by an enemy.
+    pub fn ground_items_at(
+        &self,
+        position: Position,
+    ) -> impl Iterator<Item = (usize, &GroundItem)> {
+        self.ground_items
+            .iter()
+            .enumerate()
+            .filter(move |(_, entry)| entry.position == position)
+    }
+
+    /// Transfers an existing item onto walkable terrain; returns it on rejection.
+    pub fn insert_ground_item(&mut self, item: Item, position: Position) -> Result<(), Item> {
+        if !self.is_walkable(position) {
+            return Err(item);
+        }
+        self.ground_items.push(GroundItem { item, position });
+        Ok(())
+    }
+
+    /// Removes the selected entry and transfers ownership of its original item.
+    /// Unknown indices leave storage unchanged; later indices shift after removal.
+    pub fn remove_ground_item(&mut self, index: usize) -> Option<GroundItem> {
+        if index >= self.ground_items.len() {
+            return None;
+        }
+        Some(self.ground_items.remove(index))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::{enemy::EnemyType, item::get_item};
     use map::TileType;
+
+    fn empty_level() -> Level {
+        let mut map = Map::new(5, 5);
+        for x in 1..4 {
+            map.set(Position::new(x, 1), TileType::Floor);
+        }
+        map.set(Position::new(1, 2), TileType::Door { open: false });
+        map.set(Position::new(2, 2), TileType::Rock);
+        map.set(Position::new(3, 2), TileType::Water);
+        Level::new(map, 0, Position::new(1, 1), Position::new(3, 1))
+    }
+
+    fn insert(level: &mut Level, x: usize) -> EnemyId {
+        level
+            .insert_enemy(Enemy::new(EnemyType::Goblin, Position::new(x, 1)))
+            .unwrap_or_else(|_| panic!("test enemy placement failed"))
+    }
+
+    #[test]
+    fn enemy_ids_survive_removal_and_are_never_reused() {
+        let mut level = empty_level();
+        assert_eq!(level.enemies().count(), 0);
+        assert!(level.ground_items().is_empty());
+        let first = insert(&mut level, 1);
+        let second = insert(&mut level, 2);
+        assert_eq!(level.remove_enemy(first).unwrap().stats().hp(), 25);
+        assert!(level.enemy(first).is_none());
+        assert!(level.remove_enemy(first).is_none());
+        assert!(!level.move_enemy(first, Position::new(3, 1)));
+        assert_eq!(
+            level.enemy(second).unwrap().position(),
+            &Position::new(2, 1)
+        );
+        let third = insert(&mut level, 1);
+        assert_ne!(first, third);
+        assert_eq!(
+            level.enemies().map(|(id, _)| id).collect::<Vec<_>>(),
+            [second, third]
+        );
+        assert_eq!(level.enemy_at(Position::new(1, 1)), Some(third));
+    }
+
+    #[test]
+    fn invalid_enemy_placements_and_moves_preserve_storage() {
+        let mut level = empty_level();
+        let first = insert(&mut level, 1);
+        let second = insert(&mut level, 2);
+        for position in [
+            Position::new(0, 0),
+            Position::new(5, 1),
+            Position::new(1, 2),
+            Position::new(2, 2),
+            Position::new(3, 2),
+            Position::new(2, 1),
+        ] {
+            let rejected = level
+                .insert_enemy(Enemy::new(EnemyType::Ghost, position))
+                .err()
+                .unwrap();
+            assert_eq!(*rejected.position(), position);
+            assert!(!level.move_enemy(first, position));
+            assert_eq!(*level.enemy(first).unwrap().position(), Position::new(1, 1));
+        }
+        assert_eq!(level.enemies().count(), 2);
+        assert!(level.is_walkable(Position::new(2, 1)));
+        assert!(level.move_enemy(first, Position::new(1, 1)));
+        assert!(level.move_enemy(first, Position::new(3, 1)));
+        assert!(level.enemy_at(Position::new(1, 1)).is_none());
+        assert_eq!(level.enemy_at(Position::new(3, 1)), Some(first));
+        assert_eq!(level.enemy_at(Position::new(2, 1)), Some(second));
+    }
+
+    #[test]
+    fn enemy_id_exhaustion_returns_ownership_without_reusing_ids() {
+        let mut level = empty_level();
+        level.next_enemy_id = Some(u64::MAX);
+        let last = insert(&mut level, 1);
+        level.remove_enemy(last);
+        assert!(
+            level
+                .insert_enemy(Enemy::new(EnemyType::Slime, Position::new(2, 1)))
+                .is_err()
+        );
+        assert_eq!(level.enemies().count(), 0);
+    }
+
+    #[test]
+    fn ground_entries_preserve_distinct_copies_and_original_item_data() {
+        let mut level = empty_level();
+        insert(&mut level, 1);
+        let position = Position::new(1, 1);
+        let mut first = get_item(0);
+        first.name = "Worn pickaxe".to_owned();
+        first.level = 7;
+        let mut second = get_item(0);
+        second.name = "Polished pickaxe".to_owned();
+        level.insert_ground_item(first.clone(), position).unwrap();
+        level.insert_ground_item(second.clone(), position).unwrap();
+        assert_eq!(
+            level
+                .ground_items_at(position)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>(),
+            [0, 1]
+        );
+        assert_eq!(level.ground_items_at(Position::new(4, 4)).count(), 0);
+        assert!(level.remove_ground_item(usize::MAX).is_none());
+        assert_eq!(level.ground_items().len(), 2);
+        let removed = level.remove_ground_item(1).unwrap();
+        assert_eq!(removed.item, second);
+        assert_eq!(removed.position, position);
+        assert_eq!(level.remove_ground_item(0).unwrap().item, first);
+        assert!(level.remove_ground_item(0).is_none());
+        assert!(level.ground_items().is_empty());
+    }
+
+    #[test]
+    fn rejected_ground_insertion_returns_the_existing_item() {
+        let mut level = empty_level();
+        for position in [
+            Position::new(0, 0),
+            Position::new(5, 5),
+            Position::new(1, 2),
+        ] {
+            let mut item = get_item(2);
+            item.name = "Custom potion".to_owned();
+            assert_eq!(level.insert_ground_item(item.clone(), position), Err(item));
+        }
+        assert!(level.ground_items().is_empty());
+    }
 
     #[test]
     fn terrain_validation_rejects_walls_closed_doors_and_out_of_bounds() {
