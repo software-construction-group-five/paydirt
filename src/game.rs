@@ -110,7 +110,7 @@ impl Game {
                 Action::Confirm => self.should_quit = true,
                 _ => {}
             },
-                Screen::Playing => match action {
+            Screen::Playing => match action {
                 Action::Pause => self.screen = Screen::Paused,
                 Action::MoveUp => return self.move_player(0, -1),
                 Action::MoveDown => return self.move_player(0, 1),
@@ -125,7 +125,7 @@ impl Game {
                 Action::Back => self.return_to_menu(),
                 _ => {}
             },
-                        Screen::GameOver => {
+            Screen::GameOver => {
                 if matches!(action, Action::Confirm | Action::Back) {
                     self.return_to_menu();
                 }
@@ -151,14 +151,19 @@ impl Game {
 
     /// Moves the player one tile if the target is on the map and walkable;
     /// otherwise the player stays put (Game Contract 2, using Level Contract 9
-    /// and Player Contract 7). Always spends the turn, even when blocked.
+    /// and Player Contract 7). Moving into a closed door opens it instead, and
+    /// the player stays put. Always spends the turn, even when blocked.
     fn move_player(&mut self, dx: isize, dy: isize) -> TurnResult {
-        let (Some(player), Some(level)) = (self.player.as_mut(), self.level.as_ref()) else {
+        let (Some(player), Some(level)) = (self.player.as_mut(), self.level.as_mut()) else {
             return TurnResult::Spent;
         };
         let Some(target) = player.get_position().offset(dx, dy) else {
             return TurnResult::Spent;
         };
+        // Bumping a closed door opens it; walking through takes another turn
+        if level.open_door(target) {
+            return TurnResult::Spent;
+        }
         if !level.is_walkable(target) {
             return TurnResult::Spent;
         }
@@ -301,6 +306,45 @@ mod tests {
         assert_eq!(game.process_action(&Action::Pause), TurnResult::NotSpent);
         assert_eq!(game.process_action(&Action::MoveLeft), TurnResult::NotSpent);
         assert_eq!(game.process_action(&Action::Pause), TurnResult::NotSpent);
+    }
+
+    #[test]
+    fn bumping_a_closed_door_opens_it_without_moving() {
+        use level::map::TileType;
+        // Not every floor has a door, so try new games until one does
+        for _ in 0..50 {
+            let mut game = Game::new();
+            game.process_action(&Action::Confirm);
+            let level = game.level().unwrap();
+            let map = level.get_map();
+            let found = map.positions().find_map(|door| {
+                if !matches!(map.get(door)?.kind, TileType::Door { open: false }) {
+                    return None;
+                }
+                [
+                    (Action::MoveRight, -1, 0),
+                    (Action::MoveLeft, 1, 0),
+                    (Action::MoveDown, 0, -1),
+                    (Action::MoveUp, 0, 1),
+                ]
+                .into_iter()
+                .find_map(|(action, dx, dy)| {
+                    let beside = door.offset(dx, dy)?;
+                    level.is_walkable(beside).then_some((door, beside, action))
+                })
+            });
+            let Some((door, beside, action)) = found else {
+                continue;
+            };
+            game.player.as_mut().unwrap().set_position(beside);
+            assert_eq!(game.process_action(&action), TurnResult::Spent);
+            assert_eq!(game.player().unwrap().get_position(), beside);
+            assert!(game.level().unwrap().is_walkable(door));
+            game.process_action(&action);
+            assert_eq!(game.player().unwrap().get_position(), door);
+            return;
+        }
+        panic!("no closed door found in 50 generated levels");
     }
 
     #[test]
