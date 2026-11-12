@@ -1,0 +1,51 @@
+# Action names map to lists of keys. Screen sections allow context-specific keys.
+# Named keys: up, down, left, right, enter, esc, space, tab, backspace,
+# delete, home, end, pageup, pagedown, plus, backtab (or shift+tab). Modifiers: ctrl+, alt+, shift+.
+# Global keys apply everywhere and must not conflict with screen bindings.
+
+[global]
+help = ["?"]
+quit = ["q", "ctrl+c"]
+
+[main_menu]
+move_up = ["up", "w"]
+move_down = ["down", "s"]
+confirm = ["enter"]
+
+[playing]
+descend = [">"]
+move_up = ["up", "w"]
+move_down = ["down", "s"]
+move_left = ["left", "a"]
+move_right = ["right", "d"]
+wait = ["."]
+inventory = ["i"]
+pickup = ["g"]
+pause = ["esc"]
+
+[inventory]
+wait = ["."]
+move_up = ["up", "w"]
+move_down = ["down", "s"]
+pickup = ["g"]
+use_item = ["u"]
+equip_item = ["e"]
+unequip_item = ["r"]
+drop_item = ["d"]
+back = ["esc", "i"]
+
+[paused]
+pause = ["esc"]
+confirm = ["enter"]
+back = ["m"]
+
+[game_over]
+confirm = ["enter"]
+history_up = ["up"]
+history_down = ["down"]
+history_page_up = ["pageup"]
+history_page_down = ["pagedown"]
+
+[help]
+back = ["esc"]
+confirm = ["enter"]

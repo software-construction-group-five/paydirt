@@ -1,1 +1,4 @@
 /target
+/docs/*
+!/docs/development-report.md
+.DS_Store
