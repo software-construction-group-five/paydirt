@@ -3,7 +3,7 @@
 //! Contract 18 Get Specific Item: look up an item by index.
 
 /// The three item categories.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemType {
     Weapon,
     Armor,
@@ -38,22 +38,50 @@ impl Item {
     }
 }
 
+// TODO(Robert): replace placeholder items with final item list.
+// Catalog order defines the existing public item indices.
+const CATALOG: [(&str, ItemType, u32); 3] = [
+    ("Pickaxe", ItemType::Weapon, 1),
+    ("Leather Armor", ItemType::Armor, 1),
+    ("Health Potion", ItemType::Consumable, 1),
+];
+
+/// Iterates the complete catalog in index order, constructing independent items.
+/// Generation uses this list so new catalog entries need no separate spawn list.
+pub fn catalog() -> impl Iterator<Item = Item> {
+    CATALOG
+        .iter()
+        .enumerate()
+        .map(|(index, &(name, kind, level))| Item::new(index as u32, name, kind, level))
+}
+
 /// Accepts an item index and returns the matching Item (Contract 18).
 ///
 /// Panics if no item has that index.
 pub fn get_item(index: u32) -> Item {
-    // TODO(Robert): replace placeholder items with final item list.
-    match index {
-        0 => Item::new(0, "Pickaxe", ItemType::Weapon, 1),
-        1 => Item::new(1, "Leather Armor", ItemType::Armor, 1),
-        2 => Item::new(2, "Health Potion", ItemType::Consumable, 1),
-        _ => panic!("No item with index {}", index),
-    }
+    let entry = usize::try_from(index)
+        .ok()
+        .and_then(|index| CATALOG.get(index));
+    let &(name, kind, level) = entry.unwrap_or_else(|| panic!("No item with index {index}"));
+    Item::new(index, name, kind, level)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ItemType, get_item};
+    use super::{ItemType, catalog, get_item};
+
+    #[test]
+    fn catalog_lookup_preserves_indices_and_returns_independent_items() {
+        let items: Vec<_> = catalog().collect();
+        assert_eq!(items.len(), 3);
+        for (index, item) in items.iter().enumerate() {
+            assert_eq!(item.index, index as u32);
+            assert_eq!(*item, get_item(item.index));
+        }
+        let mut carried = get_item(0);
+        carried.name = "Modified pickaxe".to_owned();
+        assert_eq!(catalog().next().unwrap().name, "Pickaxe");
+    }
 
     // TC IT 09
     #[test]

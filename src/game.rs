@@ -16,16 +16,29 @@ pub mod position;
 pub mod screen;
 pub mod stats;
 
-use action::Action;
+use action::{Action, TurnResult};
+use equipment::Equipment;
+use inventory::Inventory;
 use level::{Level, generator::LevelGenerator};
+use message_log::MessageLog;
+use player::Player;
 use rand::{SeedableRng, rngs::StdRng};
 use screen::Screen;
+use stats::Stats;
 
-/// Owns screen navigation and the active dungeon floor.
+// TODO(joseph): confirm starting stats with the team
+const STARTING_MAX_HP: i32 = 100;
+const STARTING_ATTACK: i32 = 15;
+const STARTING_DEFENSE: i32 = 5;
+const MESSAGE_LOG_CAPACITY: usize = 50;
+
+/// Owns screen navigation, the active dungeon floor, the player, and the message log.
 pub struct Game {
     screen: Screen,
     menu_selection: usize,
     level: Option<Level>,
+    player: Option<Player>,
+    log: MessageLog,
     rng: StdRng,
     should_quit: bool,
 }
@@ -43,6 +56,8 @@ impl Game {
             screen: Screen::MainMenu,
             menu_selection: 0,
             level: None,
+            player: None,
+            log: MessageLog::new(MESSAGE_LOG_CAPACITY),
             rng: StdRng::from_rng(&mut rand::rng()),
             should_quit: false,
         }
@@ -63,35 +78,47 @@ impl Game {
         self.level.as_ref()
     }
 
+    /// Returns the active player, absent before a session starts (contract 6).
+    pub fn player(&self) -> Option<&Player> {
+        self.player.as_ref()
+    }
+
+    /// Returns the current session's messages (Game State Access).
+    pub fn message_log(&self) -> &MessageLog {
+        &self.log
+    }
+
     /// Reports whether the application loop should exit and restore the terminal.
     pub fn should_quit(&self) -> bool {
         self.should_quit
     }
 
-    /// Processes menu and pause navigation.
-    pub fn process_action(&mut self, action: &Action) {
+    /// Processes menu, pause, and movement actions, and reports whether a
+    /// gameplay turn was spent (Game Contract 2).
+    pub fn process_action(&mut self, action: &Action) -> TurnResult {
         if self.should_quit {
-            return;
+            return TurnResult::NotSpent;
         }
         if matches!(action, Action::Quit) {
             self.should_quit = true;
-            return;
+            return TurnResult::NotSpent;
         }
         match self.screen {
             Screen::MainMenu => match action {
                 Action::MoveUp | Action::MoveDown => self.menu_selection = 1 - self.menu_selection,
-                Action::Confirm if self.menu_selection == 0 => {
-                    self.level = Some(LevelGenerator::generate_level(0, &mut self.rng));
-                    self.screen = Screen::Playing;
-                }
+                Action::Confirm if self.menu_selection == 0 => self.initialize_game(),
                 Action::Confirm => self.should_quit = true,
                 _ => {}
             },
-            Screen::Playing => {
-                if matches!(action, Action::Pause) {
-                    self.screen = Screen::Paused;
-                }
-            }
+            Screen::Playing => match action {
+                Action::Pause => self.screen = Screen::Paused,
+                Action::MoveUp => return self.move_player(0, -1),
+                Action::MoveDown => return self.move_player(0, 1),
+                Action::MoveLeft => return self.move_player(-1, 0),
+                Action::MoveRight => return self.move_player(1, 0),
+                Action::Wait => return TurnResult::Spent,
+                _ => {}
+            },
             Screen::Inventory => {}
             Screen::Paused => match action {
                 Action::Pause | Action::Confirm => self.screen = Screen::Playing,
@@ -104,12 +131,61 @@ impl Game {
                 }
             }
         }
+        TurnResult::NotSpent
+    }
+
+    /// Starts a fresh session: new floor, new player at its start, empty log (contract 1).
+    fn initialize_game(&mut self) {
+        let mut level = LevelGenerator::generate_level(0, &mut self.rng);
+        level.update_visibility(level.player_start());
+        let stats = Stats::new(STARTING_MAX_HP, STARTING_ATTACK, STARTING_DEFENSE);
+        self.player = Some(Player::new(
+            level.player_start(),
+            stats,
+            Inventory::new(),
+            Equipment::new(),
+        ));
+        self.level = Some(level);
+        self.log.clear();
+        self.screen = Screen::Playing;
+    }
+
+    /// Moves the player one tile if the target is on the map and walkable;
+    /// otherwise the player stays put (Game Contract 2, using Level Contract 9
+    /// and Player Contract 7). Moving into a closed door opens it instead, and
+    /// the player stays put. Enemies block movement until combat exists.
+    /// Updates line of sight after a move. Always spends the turn, even when blocked.
+    fn move_player(&mut self, dx: isize, dy: isize) -> TurnResult {
+        let (Some(player), Some(level)) = (self.player.as_mut(), self.level.as_mut()) else {
+            return TurnResult::Spent;
+        };
+        let Some(target) = player.get_position().offset(dx, dy) else {
+            return TurnResult::Spent;
+        };
+        // Bumping a closed door opens it; walking through takes another turn
+        if level.open_door(target) {
+            // An open door no longer blocks sight, so refresh what the player sees
+            level.update_visibility(player.get_position());
+            return TurnResult::Spent;
+        }
+        if !level.is_walkable(target) {
+            return TurnResult::Spent;
+        }
+        if level.enemy_at(target).is_some() {
+            // TODO(joseph): attack the enemy once combat-turns is merged (Level Contract 10)
+            return TurnResult::Spent;
+        }
+        player.set_position(target);
+        level.update_visibility(target);
+        TurnResult::Spent
     }
 
     fn return_to_menu(&mut self) {
         self.screen = Screen::MainMenu;
         self.menu_selection = 0;
         self.level = None;
+        self.player = None;
+        self.log.clear();
     }
 }
 
@@ -125,6 +201,8 @@ mod tests {
         game.process_action(&Action::Confirm);
         assert!(matches!(game.screen(), Screen::Playing));
         let start = game.level().unwrap().player_start();
+        assert!(game.level().unwrap().get_map().is_visible(start));
+        assert!(game.level().unwrap().get_map().get(start).unwrap().seen);
         game.process_action(&Action::Pause);
         assert!(matches!(game.screen(), Screen::Paused));
         game.process_action(&Action::Confirm);
@@ -137,6 +215,149 @@ mod tests {
         assert!(game.level().is_none());
         game.process_action(&Action::Confirm);
         assert_eq!(game.level().unwrap().depth(), 0);
+    }
+
+    #[test]
+    fn new_game_places_player_at_level_start() {
+        let mut game = Game::new();
+        assert!(game.player().is_none());
+        game.process_action(&Action::Confirm);
+        let start = game.level().unwrap().player_start();
+        assert!(game.level().unwrap().is_walkable(start));
+        let player = game.player().unwrap();
+        assert_eq!(player.get_position(), start);
+        assert_eq!(player.get_stats().hp(), STARTING_MAX_HP);
+        assert!(game.message_log().messages().is_empty());
+    }
+
+    #[test]
+    fn returning_to_menu_clears_the_session() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        game.process_action(&Action::Pause);
+        game.process_action(&Action::Back);
+        assert!(game.player().is_none());
+        assert!(game.message_log().messages().is_empty());
+    }
+
+    #[test]
+    fn moves_only_onto_walkable_tiles() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        let start = game.player().unwrap().get_position();
+        for (action, dx, dy) in [
+            (Action::MoveUp, 0, -1),
+            (Action::MoveDown, 0, 1),
+            (Action::MoveLeft, -1, 0),
+            (Action::MoveRight, 1, 0),
+        ] {
+            game.player.as_mut().unwrap().set_position(start);
+            let expected = start
+                .offset(dx, dy)
+                .filter(|&target| {
+                    let level = game.level().unwrap();
+                    level.is_walkable(target) && level.enemy_at(target).is_none()
+                })
+                .unwrap_or(start);
+            game.process_action(&action);
+            assert_eq!(game.player().unwrap().get_position(), expected);
+        }
+    }
+
+    #[test]
+    fn walking_into_a_wall_stops_the_player() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        // Rooms are enclosed, so walking left long enough always hits something
+        // solid (or an enemy, which also blocks)
+        for _ in 0..100 {
+            game.process_action(&Action::MoveLeft);
+        }
+        let level = game.level().unwrap();
+        let stopped = game.player().unwrap().get_position();
+        assert!(level.is_walkable(stopped));
+        assert!(
+            stopped
+                .offset(-1, 0)
+                .is_none_or(|left| !level.is_walkable(left) || level.enemy_at(left).is_some())
+        );
+    }
+
+    #[test]
+    fn movement_is_ignored_while_paused() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        let start = game.player().unwrap().get_position();
+        game.process_action(&Action::Pause);
+        for action in [
+            Action::MoveUp,
+            Action::MoveDown,
+            Action::MoveLeft,
+            Action::MoveRight,
+        ] {
+            game.process_action(&action);
+        }
+        assert_eq!(game.player().unwrap().get_position(), start);
+    }
+
+    #[test]
+    fn moves_and_waits_spend_a_turn_even_when_blocked() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        for _ in 0..100 {
+            assert_eq!(game.process_action(&Action::MoveLeft), TurnResult::Spent);
+        }
+        assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
+    }
+
+    #[test]
+    fn menus_and_pausing_do_not_spend_a_turn() {
+        let mut game = Game::new();
+        assert_eq!(game.process_action(&Action::MoveDown), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::MoveUp), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::Confirm), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::Pause), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::MoveLeft), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::Pause), TurnResult::NotSpent);
+    }
+
+    #[test]
+    fn bumping_a_closed_door_opens_it_without_moving() {
+        use level::map::TileType;
+        // Not every floor has a door, so try new games until one does
+        for _ in 0..50 {
+            let mut game = Game::new();
+            game.process_action(&Action::Confirm);
+            let level = game.level().unwrap();
+            let map = level.get_map();
+            let found = map.positions().find_map(|door| {
+                if !matches!(map.get(door)?.kind, TileType::Door { open: false }) {
+                    return None;
+                }
+                [
+                    (Action::MoveRight, -1, 0),
+                    (Action::MoveLeft, 1, 0),
+                    (Action::MoveDown, 0, -1),
+                    (Action::MoveUp, 0, 1),
+                ]
+                .into_iter()
+                .find_map(|(action, dx, dy)| {
+                    let beside = door.offset(dx, dy)?;
+                    level.is_walkable(beside).then_some((door, beside, action))
+                })
+            });
+            let Some((door, beside, action)) = found else {
+                continue;
+            };
+            game.player.as_mut().unwrap().set_position(beside);
+            assert_eq!(game.process_action(&action), TurnResult::Spent);
+            assert_eq!(game.player().unwrap().get_position(), beside);
+            assert!(game.level().unwrap().is_walkable(door));
+            game.process_action(&action);
+            assert_eq!(game.player().unwrap().get_position(), door);
+            return;
+        }
+        panic!("no closed door found in 50 generated levels");
     }
 
     #[test]

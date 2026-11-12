@@ -12,6 +12,11 @@ move_down = ["down", "s"]
 confirm = ["enter"]
 
 [playing]
+move_up = ["up", "w"]
+move_down = ["down", "s"]
+move_left = ["left", "a"]
+move_right = ["right", "d"]
+wait = ["."]
 pause = ["esc"]
 
 [inventory]
