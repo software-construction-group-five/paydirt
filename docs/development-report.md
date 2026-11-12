@@ -207,7 +207,7 @@ cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings
 ```
 
-The test suite passed **212 tests**: 209 library tests, two executable tests, and one documentation test. Coverage includes generation reproducibility and connectivity, spawn restrictions, visibility, AI decisions, dice calculations, drops, effect timing, inventory ownership, rejected actions, descent and overflow, death handling, restart, help, configuration parsing, and rendering across small/resized test backends.
+The test suite passed **215 tests**: 212 library tests, two executable tests, and one documentation test. Coverage includes generation reproducibility and connectivity, spawn restrictions, visibility, AI decisions, dice calculations, drops, effect timing, inventory ownership, rejected actions, descent and overflow, death handling, restart, help, configuration parsing, and rendering across small/resized test backends.
 
 Three new visibility regressions cover diagonal boundary walls in square and rectangular rooms, hidden terrain behind diagonal walls, and the vision-range boundary for floors and walls with exploration memory retained after moving away. Movement and door-opening tests now verify visibility against both terrain line of sight and the player’s lamp range cap.
 
@@ -220,6 +220,30 @@ Three helmet regressions verify catalog names, stats and equipped defense, depth
 These results establish an automated baseline. They do not establish completion of a real-terminal playthrough, balance testing, release review, or customer acceptance.
 
 Project standards call for default Rust formatting, Clippy checks, composition, single ownership, documented public APIs, descriptive commits, and feature-branch review. The SCM Plan specifies issue-linked pull requests, independent review, document review through Teams, and a configuration audit before baseline tagging.
+
+## Follow-up code review and maintenance pass
+
+The follow-up pass reviewed controller scheduling, combat/effects, inventory transfers,
+generation, visibility, configuration, and terminal presentation against the README,
+this report, and the design and coding standards documents.
+
+- Fixed uppercase bindings that failed when terminals omitted the Shift flag, and
+  extended shifted punctuation normalization beyond `>` and `?`. Equivalent aliases
+  now share conflict detection; Ctrl and Alt remain distinct.
+- Fixed premature integer rounding in rare-effect power for supported custom dice
+  pools. For example, 5d4 averages 12.5 damage and now yields power 4 rather than 3.
+  The catalog's Pickaxe and Shovel still yield power 2.
+- Removed the two temporary loot-selection vectors while preserving pool ordering,
+  category probabilities, and RNG call order. Added empty, fuel-only, and single-category
+  coverage alongside the existing distribution tests.
+- Skipped effect snapshots and log formatting for actors without active effects.
+  Existing timing, death, and descent tests cover the shared turn boundary.
+- Reused the underlying screen when building launcher views and corrected stale TUI
+  ownership comments.
+
+The input and effect-power regressions failed before the fixes and passed afterward.
+These changes do not include a performance benchmark or a real-terminal acceptance
+playthrough; automated rendering checks use Ratatui's test backend.
 
 ## Remaining development work
 

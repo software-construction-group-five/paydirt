@@ -159,8 +159,9 @@ impl Item {
                 _ => EffectKind::Lightning,
             };
             // Base damage excludes the randomized depth bonus and critical attack rolls.
-            let power = ((dice.minimum() + dice.maximum()) / 2 + base_bonus)
-                .div_ceil(4)
+            // Divide only once so half-point averages are not truncated first.
+            let power = (dice.minimum() + dice.maximum() + 2 * base_bonus)
+                .div_ceil(8)
                 .max(1) as i32;
             self.combat.on_hit = Some(EffectSpec::weapon(kind, power, 3));
         }
@@ -323,23 +324,33 @@ pub(crate) fn choose_loot(items: &[Item], rng: &mut impl Rng) -> Option<Item> {
         .filter(|item| item.kind == ItemType::Armor)
         .map(|item| item.level)
         .max();
-    let armor: Vec<_> = items
-        .iter()
-        .filter(|item| item.kind == ItemType::Armor && Some(item.level) == armor_level)
-        .collect();
-    let other: Vec<_> = items
-        .iter()
-        .filter(|item| item.kind != ItemType::Armor && !item.is_lamp_fuel())
-        .collect();
-    let pool = if other.is_empty() || (!armor.is_empty() && rng.random_range(0..20) == 0) {
-        &armor
-    } else {
-        &other
+    let armor = || {
+        items
+            .iter()
+            .filter(|item| item.kind == ItemType::Armor && Some(item.level) == armor_level)
     };
-    if pool.is_empty() {
+    let other = || {
+        items
+            .iter()
+            .filter(|item| item.kind != ItemType::Armor && !item.is_lamp_fuel())
+    };
+    let armor_count = armor().count();
+    let other_count = other().count();
+    let select_armor = other_count == 0 || (armor_count > 0 && rng.random_range(0..20) == 0);
+    let count = if select_armor {
+        armor_count
+    } else {
+        other_count
+    };
+    if count == 0 {
         return None;
     }
-    Some((*pool[rng.random_range(0..pool.len())]).clone())
+    let index = rng.random_range(0..count);
+    if select_armor {
+        armor().nth(index).cloned()
+    } else {
+        other().nth(index).cloned()
+    }
 }
 
 /// Accepts an item index and returns the matching Item (Contract 18).
@@ -357,6 +368,48 @@ pub fn get_item(index: u32) -> Item {
 #[cfg(test)]
 mod tests {
     use super::{ItemType, catalog, get_item};
+
+    #[test]
+    fn loot_handles_empty_and_single_category_pools_without_spawning_fuel() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(42);
+        assert!(super::choose_loot(&[], &mut rng).is_none());
+        let fuel = get_item(super::LAMP_FUEL_INDEX);
+        assert!(super::choose_loot(std::slice::from_ref(&fuel), &mut rng).is_none());
+        let potion = get_item(2);
+        let helmet = get_item(7);
+        for _ in 0..100 {
+            assert_eq!(
+                super::choose_loot(&[fuel.clone(), potion.clone()], &mut rng),
+                Some(potion.clone())
+            );
+            assert_eq!(
+                super::choose_loot(&[get_item(1), helmet.clone(), fuel.clone()], &mut rng),
+                Some(helmet.clone())
+            );
+        }
+    }
+
+    #[test]
+    fn effect_power_rounds_up_after_computing_fractional_average_damage() {
+        use rand::{SeedableRng, rngs::StdRng};
+        // 5d4 averages 12.5, so a quarter of its average rounds up to 4.
+        let weapon = get_item(0).with_combat(super::CombatModifiers::weapon(
+            super::DamageDice::new(5, super::Die::D4),
+            None,
+        ));
+        let effect = (0..10000)
+            .find_map(|seed| {
+                weapon
+                    .clone()
+                    .roll_spawn(0, &mut StdRng::seed_from_u64(seed))
+                    .combat()
+                    .on_hit()
+                    .cloned()
+            })
+            .expect("seeded sample must contain a rare effect");
+        assert_eq!(effect.power(), 4);
+    }
 
     #[test]
     fn helmet_catalog_progression_and_equipped_defense() {

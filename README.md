@@ -37,6 +37,11 @@ loads both configuration files relative to the project root.
 Edit `config/keybinds.toml` to change controls. Each action accepts a list
 of keys. Bindings are scoped by screen, with a global section for quit.
 
+Use `X` or `shift+x` for an uppercase letter and `plus` for `+`.
+Uppercase letters and shifted punctuation accept terminal events with or without
+an explicit Shift flag. Equivalent bindings, such as `plus` and `shift+plus`,
+are rejected as duplicates; Ctrl and Alt modifiers remain distinct.
+
 Press `?` from any screen to open the controls menu. It uses the same centered
 panel, colors, and backdrop as the pause overlay, sized to its text. The menu
 shows the current screen's actual configured bindings, including remaps. Press

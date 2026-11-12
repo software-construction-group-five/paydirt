@@ -1,8 +1,8 @@
 //! Terminal presentation and input modules.
 //!
 //! Rendering consumes borrowed display data and never changes game state. The
-//! display data bridges the unfinished gameplay types without depending on their
-//! eventual storage or accessors. Input and terminal lifecycle belong to callers.
+//! display data bridges gameplay and presentation without exposing mutable game
+//! state. Input polling and terminal lifecycle belong to callers.
 //!
 //! Pass the current screen and available state to the renderer inside the caller's
 //! terminal draw callback. Entity builders resolve visible level populations through
@@ -84,7 +84,7 @@ pub struct StatusView<'a> {
     pub equipment: &'a [&'a str],
 }
 
-/// One inventory row, independent of the game's eventual inventory storage.
+/// One inventory row, independent of the game's inventory storage.
 pub struct InventoryEntry<'a> {
     /// Item name.
     pub name: &'a str,

@@ -62,6 +62,7 @@ fn with_view<R>(
     help: &str,
     draw: impl FnOnce(&RenderView<'_>) -> R,
 ) -> R {
+    let underlying_screen = game.help_origin().unwrap_or(*game.screen());
     let player = game.player();
     let player_position = player.map(|player| player.get_position());
     let enemies = game
@@ -72,7 +73,7 @@ fn with_view<R>(
         .level()
         .map(|level| renderer.item_entities(level))
         .unwrap_or_default();
-    let log = if game.help_origin().unwrap_or(*game.screen()) == Screen::GameOver {
+    let log = if underlying_screen == Screen::GameOver {
         game.message_log().history()
     } else {
         game.message_log().messages()
@@ -135,7 +136,7 @@ fn with_view<R>(
         status,
         messages: &messages,
         inventory: &inventory,
-        selected: if game.help_origin().unwrap_or(*game.screen()) == Screen::Inventory {
+        selected: if underlying_screen == Screen::Inventory {
             game.inventory_selection()
         } else {
             game.menu_selection()

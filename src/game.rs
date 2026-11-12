@@ -594,6 +594,9 @@ impl Game {
         let Some(player) = self.player.as_mut() else {
             return false;
         };
+        if player.get_stats().status_effects().is_empty() {
+            return false;
+        }
         let effects = player.get_stats().status_effects().to_vec();
         let lost = player.tick_status_effects();
         self.log_effect_tick("You", &effects, lost);
@@ -610,7 +613,13 @@ impl Game {
         let Some(level) = self.level.as_ref() else {
             return;
         };
-        let enemy_ids: Vec<_> = level.enemies().map(|(id, _)| id).collect();
+        let enemy_ids: Vec<_> = level
+            .enemies()
+            .filter(|(_, enemy)| {
+                !enemy.stats().is_dead() && !enemy.stats().status_effects().is_empty()
+            })
+            .map(|(id, _)| id)
+            .collect();
         for id in enemy_ids {
             let Some(level) = self.level.as_mut() else {
                 return;

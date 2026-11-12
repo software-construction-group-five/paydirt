@@ -103,10 +103,11 @@ impl Keybinds {
         if key.kind != KeyEventKind::Press {
             return None;
         }
+        let chord = key_chord(key.code, key.modifiers);
         self.global
             .iter()
             .chain(&self.screens[screen_index(screen)])
-            .find(|binding| binding.keys.contains(&key_chord(key.code, key.modifiers)))
+            .find(|binding| binding.keys.contains(&chord))
             .map(|binding| &binding.action)
     }
 
@@ -219,7 +220,15 @@ fn key_chord(code: KeyCode, modifiers: KeyModifiers) -> Key {
     match code {
         KeyCode::Tab if modifiers.contains(KeyModifiers::SHIFT) => (KeyCode::BackTab, modifiers),
         KeyCode::BackTab => (code, modifiers | KeyModifiers::SHIFT),
-        KeyCode::Char('>' | '?') => (code, modifiers - KeyModifiers::SHIFT),
+        KeyCode::Char(character) if "!@#$%^&*()_+{}|:\"<>?~".contains(character) => {
+            (code, modifiers - KeyModifiers::SHIFT)
+        }
+        KeyCode::Char(character) if character.is_ascii_uppercase() => {
+            (code, modifiers | KeyModifiers::SHIFT)
+        }
+        KeyCode::Char(character) if modifiers.contains(KeyModifiers::SHIFT) => {
+            (KeyCode::Char(character.to_ascii_uppercase()), modifiers)
+        }
         _ => (code, modifiers),
     }
 }
@@ -274,6 +283,44 @@ fn parse_key(label: &str) -> io::Result<Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uppercase_and_shifted_punctuation_match_terminal_variants() {
+        let source = include_str!("../../config/keybinds.toml");
+        for label in ["X", "shift+x", "!", "plus", "shift+plus", "@", "_"] {
+            let bindings = Keybinds::parse(
+                &source.replace("wait = [\".\"]", &format!("wait = [\"{label}\"]")),
+            )
+            .unwrap();
+            let character = match label {
+                "X" | "shift+x" => 'X',
+                "plus" | "shift+plus" => '+',
+                _ => label.chars().next().unwrap(),
+            };
+            for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+                assert_eq!(
+                    bindings.action(
+                        &Screen::Playing,
+                        KeyEvent::new(KeyCode::Char(character), modifiers)
+                    ),
+                    Some(&Action::Wait),
+                    "binding {label:?}, modifiers {modifiers:?}"
+                );
+            }
+            assert!(
+                bindings
+                    .action(
+                        &Screen::Playing,
+                        KeyEvent::new(KeyCode::Char(character), KeyModifiers::ALT)
+                    )
+                    .is_none()
+            );
+        }
+        assert!(
+            Keybinds::parse(&source.replace("wait = [\".\"]", "wait = [\"plus\", \"shift+plus\"]"))
+                .is_err()
+        );
+    }
 
     #[test]
     fn help_opens_with_shifted_or_unshifted_question_mark_and_uses_remapped_controls() {
