@@ -82,14 +82,20 @@ fn with_view<R>(
         view.focus = player_position.or(Some(level.player_start()));
         view
     });
-    let equipment: Vec<&str> = player
+    let equipment: Vec<String> = player
         .into_iter()
         .flat_map(|player| {
             let equipment = player.get_equipped_items();
             equipment.weapon.iter().chain(equipment.armor.iter())
         })
-        .map(|item| item.name.as_str())
+        .map(|item| {
+            item.combat().damage().map_or_else(
+                || item.name.clone(),
+                |dice| format!("{} ({dice})", item.name),
+            )
+        })
         .collect();
+    let equipment_names: Vec<&str> = equipment.iter().map(String::as_str).collect();
     let effects: Vec<String> = player
         .into_iter()
         .flat_map(|player| player.get_stats().status_effects())
@@ -98,7 +104,7 @@ fn with_view<R>(
     let effect_names: Vec<&str> = effects.iter().map(String::as_str).collect();
     let status = StatusView {
         health: player.map(|player| (player.get_stats().hp(), player.get_stats().max_hp())),
-        equipment: &equipment,
+        equipment: &equipment_names,
         effects: &effect_names,
     };
     let view = RenderView {
@@ -139,7 +145,7 @@ mod tests {
             .collect();
         assert!(screen.contains('@'));
         assert!(screen.contains("Health: 40 / 40"));
-        assert!(screen.contains("Pickaxe"));
+        assert!(screen.contains("Pickaxe (2d4)"));
 
         let keybinds = Keybinds::parse(include_str!("../config/keybinds.toml")).unwrap();
         for code in [
