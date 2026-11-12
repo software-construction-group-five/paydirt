@@ -4,12 +4,35 @@
 //! consumed by Game::process_action (contract 2). Game owns what each action means.
 
 /// A recognized player action, independent of which key triggered it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     MoveUp,
     MoveDown,
     MoveLeft,
     MoveRight,
     Wait,
+    /// Toggle the controls overlay without spending a turn.
+    Help,
+    /// Open the inventory without spending a turn.
+    OpenInventory,
+    /// Pick up the first item at the player's tile.
+    Pickup,
+    /// Use the selected carried consumable.
+    UseItem,
+    /// Equip the selected carried weapon or armor.
+    EquipItem,
+    /// Unequip the selected equipment slot.
+    UnequipItem,
+    /// Drop the selected carried or equipped item.
+    DropItem,
+    /// Scroll one history line toward older messages.
+    HistoryUp,
+    /// Scroll one history line toward newer messages.
+    HistoryDown,
+    /// Scroll ten history lines toward older messages.
+    HistoryPageUp,
+    /// Scroll ten history lines toward newer messages.
+    HistoryPageDown,
     Pause,
     Confirm,
     Back,

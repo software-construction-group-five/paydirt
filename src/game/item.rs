@@ -74,6 +74,7 @@ pub struct Item {
     /// The game level the item spawns on.
     pub level: u32,
     combat: CombatModifiers,
+    healing: Option<i32>,
 }
 
 impl Item {
@@ -85,6 +86,7 @@ impl Item {
             kind,
             level,
             combat: CombatModifiers::default(),
+            healing: None,
         }
     }
 
@@ -106,21 +108,76 @@ impl Item {
     pub fn combat(&self) -> &CombatModifiers {
         &self.combat
     }
+
+    /// Sets positive consumable healing without affecting equipment modifiers.
+    pub fn with_healing(mut self, amount: i32) -> Self {
+        assert!(
+            self.kind == ItemType::Consumable && amount > 0,
+            "Healing requires a consumable and positive HP."
+        );
+        self.healing = Some(amount);
+        self
+    }
+
+    /// Healing supplied by this consumable, if it has a supported use effect.
+    pub fn healing(&self) -> Option<i32> {
+        self.healing
+    }
 }
 
 // TODO(Robert): replace placeholder items with final item list.
 // Catalog order defines the existing public item indices.
-const CATALOG: [(&str, ItemType, u32, Option<DamageDice>, i32); 3] = [
-    (
-        "Pickaxe",
-        ItemType::Weapon,
-        1,
-        Some(DamageDice::new(2, Die::D4)),
-        0,
-    ),
-    ("Leather Armor", ItemType::Armor, 1, None, 1),
-    ("Health Potion", ItemType::Consumable, 1, None, 0),
+struct CatalogEntry {
+    name: &'static str,
+    kind: ItemType,
+    level: u32,
+    damage: Option<DamageDice>,
+    defense: i32,
+    healing: Option<i32>,
+}
+
+const CATALOG: [CatalogEntry; 3] = [
+    CatalogEntry {
+        name: "Pickaxe",
+        kind: ItemType::Weapon,
+        level: 1,
+        damage: Some(DamageDice::new(2, Die::D4)),
+        defense: 0,
+        healing: None,
+    },
+    CatalogEntry {
+        name: "Leather Armor",
+        kind: ItemType::Armor,
+        level: 1,
+        damage: None,
+        defense: 1,
+        healing: None,
+    },
+    CatalogEntry {
+        name: "Health Potion",
+        kind: ItemType::Consumable,
+        level: 1,
+        damage: None,
+        defense: 0,
+        healing: Some(12),
+    },
 ];
+
+impl CatalogEntry {
+    fn item(&self, index: u32) -> Item {
+        let combat = CombatModifiers {
+            damage: self.damage,
+            defense: self.defense,
+            on_hit: None,
+        };
+        let item = Item::new(index, self.name, self.kind, self.level).with_combat(combat);
+        if let Some(healing) = self.healing {
+            item.with_healing(healing)
+        } else {
+            item
+        }
+    }
+}
 
 /// Iterates the complete catalog in index order, constructing independent items.
 /// Generation uses this list so new catalog entries need no separate spawn list.
@@ -128,7 +185,7 @@ pub fn catalog() -> impl Iterator<Item = Item> {
     CATALOG
         .iter()
         .enumerate()
-        .map(|(index, &entry)| catalog_item(index as u32, entry))
+        .map(|(index, entry)| entry.item(index as u32))
 }
 
 /// Accepts an item index and returns the matching Item (Contract 18).
@@ -138,22 +195,9 @@ pub fn get_item(index: u32) -> Item {
     let entry = usize::try_from(index)
         .ok()
         .and_then(|index| CATALOG.get(index));
-    catalog_item(
-        index,
-        *entry.unwrap_or_else(|| panic!("No item with index {index}")),
-    )
-}
-
-fn catalog_item(
-    index: u32,
-    (name, kind, level, damage, defense): (&str, ItemType, u32, Option<DamageDice>, i32),
-) -> Item {
-    let combat = CombatModifiers {
-        damage,
-        defense,
-        on_hit: None,
-    };
-    Item::new(index, name, kind, level).with_combat(combat)
+    entry
+        .unwrap_or_else(|| panic!("No item with index {index}"))
+        .item(index)
 }
 
 #[cfg(test)]

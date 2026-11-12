@@ -4,8 +4,9 @@ A terminal roguelike about Paydirt Pete's daring escape from the mine
 
 Combat uses dice-based player and enemy attacks, weapon status effects, immediate
 enemy removal, rare equipment drops, and a shared turn loop. Death stops the turn
-and shows final depth, cause, and recent messages. Inventory controls, floor
-progression, and full game-over history scrolling remain unfinished.
+and shows final depth, cause, and scrollable full message history. Inventory
+controls support pickup, drop, equipment swaps, and healing potions. Floor
+progression remains unfinished.
 
 ## Theme configuration
 
@@ -32,6 +33,52 @@ loads both configuration files relative to the project root.
 
 Edit `config/keybinds.toml` to change controls. Each action accepts a list
 of keys. Bindings are scoped by screen, with a global section for quit.
+
+Press `?` from any screen to open the controls menu. It uses the same centered
+panel, colors, and backdrop as the pause overlay, sized to its text. The menu
+shows the current screen's actual configured bindings, including remaps. Press
+`?`, Esc, or Enter to close it and restore that screen. Combat and effects stay
+frozen; inventory selection and game-over history position are preserved.
+Controls are shown here instead of inline footers.
+
+## Inventory and game-over controls
+
+| Screen | Default key | Action |
+| --- | --- | --- |
+| Any screen | `?` | Open or close the controls menu without spending a turn |
+| Help | Esc / Enter | Return to the previous screen |
+| Playing | `i` | Open inventory without spending a turn |
+| Playing / Inventory | `g` | Pick up the first ground item at your tile |
+| Playing / Inventory | `.` | Wait one turn without moving |
+| Inventory | Up/Down or W/S | Select a carried entry or equipped slot |
+| Inventory | `e` / `r` | Equip a carried item / unequip the selected slot |
+| Inventory | `u` / `d` | Use a carried consumable / drop the selected item |
+| Inventory | Esc / `i` | Return to play without spending a turn |
+| GameOver | Up/Down | Scroll one history line older/newer |
+| GameOver | PageUp/PageDown | Scroll ten history lines older/newer |
+| GameOver | Enter | Return to the main menu |
+
+Inventory shows carried copies first, then occupied weapon and armor slots.
+Duplicate copies have separate selections. Transfers preserve original item data,
+including damage dice and weapon effects. A swap returns displaced equipment to
+the pack, even when its category was full; removing the selected carried copy
+frees that space. Unequip checks capacity before changing anything. Carried limits
+remain three weapons, one armor, and five consumables; equipped items are separate.
+Dropping an equipped item directly restores its unequipped stats.
+
+Health Potions restore up to **12 HP**, capped at maximum health, and consume one
+selected copy on success. At full health the potion is kept. Pickup, drop, equip,
+unequip, and use attempts all spend a turn, including full categories, empty
+selections, wrong item types, or full-health rejections. Enemies and effects can
+therefore damage or kill you while the inventory is open. The inventory displays
+current health, equipment, and recent results; opening, closing, and selecting
+rows spend no turns. Controls and help use the same configurable bindings.
+
+GameOver starts at the newest messages and can scroll the full retained history,
+including multiline entries older than the recent 50-message window. Scrolling
+spends no turns and consumes no RNG. On short terminals, history gets priority
+over the summary. Returning to menu or starting a new session clears selections,
+scroll position, history, and summary.
 
 ## Level generation
 
@@ -230,15 +277,15 @@ The status panel shows active effect names and remaining turns.
 
 Blocked moves, waits, bump attacks, and opening doors all run this boundary once.
 Menus, pause, unsupported keys, and redraws do not advance enemies or effects.
-Future pickup/drop/equip/use handlers must return their spent-turn result to this
+Pickup/drop/equip/unequip/use handlers return their spent-turn result to this
 same boundary, including failed attempts, rather than starting another loop.
 
 After any lethal damage update, Game stores final depth and cause, appends the
-death message, enters GameOver, and rejects further gameplay actions. The recent
-message panel remains visible on GameOver; full history is retained in MessageLog
+death message, enters GameOver, and rejects further gameplay actions. The full
+message history remains available for scrolling on GameOver, retained in MessageLog
 until returning to menu or restarting. Summary, history, effects, and equipment
-reset for a new session. Full-history scrolling and floor descent remain future
-work; descent must eventually use the previously agreed transition exception
+reset for a new session. Floor descent remains future work; descent must
+eventually use the previously agreed transition exception
 (player effects before replacement, no enemy phase on successful descent).
 
 Run `cargo fmt --check`, `cargo test --offline`, and

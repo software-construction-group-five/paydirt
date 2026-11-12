@@ -1,6 +1,9 @@
 //! Read-only inventory list with selection and equipment markers.
 
-use super::panel;
+use super::{
+    panel,
+    playing::{draw_messages, draw_status},
+};
 use crate::tui::{RenderView, theme::Theme};
 use ratatui::{
     Frame,
@@ -10,8 +13,25 @@ use ratatui::{
 
 /// Draws inventory rows and scrolls to the selected item using local widget state.
 pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
-    let [body, help] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    let body = frame.area();
+    let status_height = if view.status.health.is_some() && body.height >= 12 {
+        5
+    } else {
+        0
+    };
+    let log_height = if !view.messages.is_empty() && body.height >= 6 {
+        if body.height >= 14 { 5 } else { 3 }
+    } else {
+        0
+    };
+    let [status, body, log] = Layout::vertical([
+        Constraint::Length(status_height),
+        Constraint::Min(0),
+        Constraint::Length(log_height),
+    ])
+    .areas(body);
+    draw_status(frame, status, &view.status, theme);
+    draw_messages(frame, log, view.messages, theme);
     let block = panel(" Inventory ", theme);
     if view.inventory.is_empty() {
         frame.render_widget(Paragraph::new("Your pack is empty.").block(block), body);
@@ -41,7 +61,6 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
             &mut state,
         );
     }
-    frame.render_widget(Paragraph::new(view.help).style(theme.muted), help);
 }
 
 #[cfg(test)]
@@ -77,5 +96,34 @@ mod tests {
         };
         let output = text(&draw_screen(60, 8, Screen::Inventory, &view));
         assert!(output.contains("> [z] Pickaxe / Weapon (equipped)"));
+    }
+
+    #[test]
+    fn inventory_shows_health_and_action_failures_alongside_items() {
+        let inventory = [InventoryEntry {
+            name: "Pickaxe (2d4)",
+            category: "Weapon",
+            equipped: true,
+            key: None,
+        }];
+        let view = RenderView {
+            inventory: &inventory,
+            status: crate::tui::StatusView {
+                health: Some((30, 40)),
+                ..Default::default()
+            },
+            messages: &["That inventory category is full."],
+            help: "e: equip r: unequip u: use d: drop esc: back",
+            ..Default::default()
+        };
+        let output = text(&draw_screen(80, 24, Screen::Inventory, &view));
+        for expected in [
+            "Pickaxe (2d4)",
+            "equipped",
+            "Health: 30 / 40",
+            "category is full",
+        ] {
+            assert!(output.contains(expected));
+        }
     }
 }

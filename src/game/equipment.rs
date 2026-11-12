@@ -4,6 +4,15 @@
 
 use crate::game::item::{Item, ItemType};
 
+/// A specific equipment slot, distinct from an inventory entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EquipmentSlot {
+    /// Equipped weapon.
+    Weapon,
+    /// Equipped armor.
+    Armor,
+}
+
 /// Keeps track of the player's equipped items: one weapon slot and one armor slot.
 ///
 /// Owned by Player. An empty slot is `None`.
@@ -16,6 +25,21 @@ pub struct Equipment {
 }
 
 impl Equipment {
+    /// Borrows the item in a selected slot.
+    pub fn item(&self, slot: EquipmentSlot) -> Option<&Item> {
+        match slot {
+            EquipmentSlot::Weapon => self.weapon.as_ref(),
+            EquipmentSlot::Armor => self.armor.as_ref(),
+        }
+    }
+
+    /// Takes ownership of the selected slot's item.
+    pub fn take(&mut self, slot: EquipmentSlot) -> Option<Item> {
+        match slot {
+            EquipmentSlot::Weapon => self.weapon.take(),
+            EquipmentSlot::Armor => self.armor.take(),
+        }
+    }
     /// Creates an Equipment with both slots empty.
     pub fn new() -> Equipment {
         Equipment {

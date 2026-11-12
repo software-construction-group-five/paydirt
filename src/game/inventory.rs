@@ -25,22 +25,40 @@ impl Inventory {
     /// Returns false when full. The index must exist in the Item catalog.
     /// Multiple copies of the same item each occupy one space.
     pub fn add_item(&mut self, index: u32) -> bool {
-        let item = get_item(index);
-        let limit = match item.kind {
+        self.insert_item(get_item(index)).is_ok()
+    }
+
+    /// Borrows carried entries in selection order; duplicate copies stay distinct.
+    pub fn items(&self) -> &[Item] {
+        &self.items
+    }
+
+    /// Checks capacity for one additional item of this category.
+    pub fn can_accept(&self, kind: ItemType) -> bool {
+        let limit = match kind {
             ItemType::Consumable => 5,
             ItemType::Weapon => 3,
             ItemType::Armor => 1,
         };
-        let count = self
-            .items
-            .iter()
-            .filter(|held| held.kind == item.kind)
-            .count();
-        if count >= limit {
-            return false;
+        let count = self.items.iter().filter(|held| held.kind == kind).count();
+        count < limit
+    }
+
+    /// Transfers an existing item, returning ownership unchanged when full.
+    pub fn insert_item(&mut self, item: Item) -> Result<(), Item> {
+        if !self.can_accept(item.kind) {
+            return Err(item);
         }
         self.items.push(item);
-        true
+        Ok(())
+    }
+
+    /// Removes a carried storage entry, independently of its catalog index.
+    pub fn remove_entry(&mut self, index: usize) -> Option<Item> {
+        if index >= self.items.len() {
+            return None;
+        }
+        Some(self.items.remove(index))
     }
 
     /// Removes and returns the first copy with this catalog index (contract 16).
@@ -81,6 +99,25 @@ impl Inventory {
 #[cfg(test)]
 mod tests {
     use super::Inventory;
+
+    #[test]
+    fn owned_transfers_preserve_duplicate_entries_and_return_rejected_items() {
+        use crate::game::item::get_item;
+        let mut inventory = Inventory::new();
+        let mut first = get_item(1);
+        first.name = "Custom armor".into();
+        inventory.insert_item(first.clone()).unwrap();
+        let rejected = get_item(1);
+        assert_eq!(inventory.insert_item(rejected.clone()), Err(rejected));
+        assert_eq!(inventory.remove_entry(0), Some(first));
+        let mut duplicate = get_item(0);
+        duplicate.name = "Second copy".into();
+        inventory.insert_item(get_item(0)).unwrap();
+        inventory.insert_item(duplicate.clone()).unwrap();
+        assert_eq!(inventory.remove_entry(1), Some(duplicate));
+        assert_eq!(inventory.items(), &[get_item(0)]);
+        assert!(inventory.remove_entry(usize::MAX).is_none());
+    }
 
     #[test]
     fn add_item_enforces_each_category_limit_without_storing_extra_items() {

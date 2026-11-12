@@ -12,17 +12,27 @@ use ratatui::{
 /// Draws the available outcome and final depth without assuming a cause of death.
 pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
     let area = frame.area();
+    let history: Vec<&str> = view
+        .messages
+        .iter()
+        .flat_map(|message| message.lines())
+        .collect();
+    let offset = view.history_offset.min(history.len().saturating_sub(1));
+    let history = &history[..history.len().saturating_sub(offset)];
     let summary_area = if view.messages.is_empty() {
         area
     } else {
         let log_height = if area.height >= 16 {
             7
-        } else {
+        } else if area.height >= 8 {
             area.height / 2
+        } else {
+            // Preserve at least a readable history line before the summary.
+            area.height
         };
         let [summary, log] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(log_height)]).areas(area);
-        draw_messages(frame, log, view.messages, theme);
+        draw_messages(frame, log, history, theme);
         summary
     };
     let depth = view.final_depth.map_or_else(
@@ -35,7 +45,6 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
         Line::from(view.outcome.unwrap_or("The expedition has ended.")),
         Line::from(depth),
         Line::from(""),
-        Line::from(view.help).style(theme.muted),
     ];
     frame.render_widget(
         Paragraph::new(lines)
@@ -54,6 +63,27 @@ mod tests {
         game::screen::Screen,
         tui::tests::{draw_screen, text},
     };
+
+    #[test]
+    fn scrolling_reaches_every_multiline_history_line_on_short_terminals() {
+        let messages = ["oldest\nsecond", "third", "newest"];
+        for (offset, expected) in [
+            (0, "newest"),
+            (1, "third"),
+            (2, "second"),
+            (3, "oldest"),
+            (usize::MAX, "oldest"),
+        ] {
+            let view = RenderView {
+                history_offset: offset,
+                messages: &messages,
+                help: "up: older down: newer pageup: older page pagedown: newer page enter: menu",
+                ..Default::default()
+            };
+            let output = text(&draw_screen(20, 4, Screen::GameOver, &view));
+            assert!(output.contains(expected), "offset {offset}: {output}");
+        }
+    }
 
     #[test]
     fn results_show_cause_depth_and_the_lethal_message() {

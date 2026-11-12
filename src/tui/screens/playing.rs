@@ -17,9 +17,7 @@ use ratatui::{
 
 /// Draws gameplay above a full-width message log, with status beside wide maps.
 pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
-    let [body, help] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-    frame.render_widget(Paragraph::new(view.help).style(theme.muted), help);
+    let body = frame.area();
     // Reserve the bottom log first; collapse status before losing useful map space.
     let (content, log_area) = if !view.messages.is_empty() && body.height >= 7 {
         let log_height = if body.height >= 16 { 5 } else { 3 };

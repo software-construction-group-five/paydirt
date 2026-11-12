@@ -20,11 +20,11 @@ pub mod stats;
 use action::{Action, TurnResult};
 use combat::{attack_damage, equipment_drop};
 use enemy::ai::{self, AiProfile, Intent};
-use equipment::Equipment;
+use equipment::{Equipment, EquipmentSlot};
 use inventory::Inventory;
 use level::{EnemyId, Level, generator::LevelGenerator};
 use message_log::MessageLog;
-use player::Player;
+use player::{ItemError, Player};
 use rand::{SeedableRng, rngs::StdRng};
 use screen::Screen;
 use stats::{Stats, StatusEffect};
@@ -44,6 +44,15 @@ pub struct GameSummary {
     pub outcome: String,
 }
 
+/// A selectable owned copy, independent of the item's catalog index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InventorySelection {
+    /// Current carried storage index; rebuilt after transfers.
+    Carried(usize),
+    /// Current equipment slot.
+    Equipped(EquipmentSlot),
+}
+
 /// Owns screen navigation, the active dungeon floor, the player, and the message log.
 pub struct Game {
     screen: Screen,
@@ -54,6 +63,9 @@ pub struct Game {
     rng: StdRng,
     should_quit: bool,
     summary: Option<GameSummary>,
+    inventory_selection: usize,
+    history_offset: usize,
+    help_origin: Option<Screen>,
 }
 
 impl Default for Game {
@@ -74,6 +86,9 @@ impl Game {
             rng: StdRng::from_rng(&mut rand::rng()),
             should_quit: false,
             summary: None,
+            inventory_selection: 0,
+            history_offset: 0,
+            help_origin: None,
         }
     }
 
@@ -107,6 +122,42 @@ impl Game {
         self.summary.as_ref()
     }
 
+    /// Selected inventory row, clamped after any item transfer.
+    pub fn inventory_selection(&self) -> usize {
+        self.inventory_selection
+    }
+
+    /// Lines scrolled back from the newest game-over message.
+    pub fn history_offset(&self) -> usize {
+        self.history_offset
+    }
+
+    /// Screen paused beneath the controls overlay, if help is open.
+    pub fn help_origin(&self) -> Option<Screen> {
+        self.help_origin
+    }
+
+    /// Carried entries followed by occupied weapon/armor slots, borrowing originals.
+    pub fn inventory_rows(&self) -> Vec<(InventorySelection, &item::Item)> {
+        let Some(player) = self.player.as_ref() else {
+            return Vec::new();
+        };
+        let mut rows: Vec<_> = player
+            .get_inventory()
+            .items()
+            .iter()
+            .enumerate()
+            .map(|(index, item)| (InventorySelection::Carried(index), item))
+            .collect();
+        let equipment = player.get_equipped_items();
+        for slot in [EquipmentSlot::Weapon, EquipmentSlot::Armor] {
+            if let Some(item) = equipment.item(slot) {
+                rows.push((InventorySelection::Equipped(slot), item));
+            }
+        }
+        rows
+    }
+
     /// Reports whether the application loop should exit and restore the terminal.
     pub fn should_quit(&self) -> bool {
         self.should_quit
@@ -120,6 +171,15 @@ impl Game {
         }
         if matches!(action, Action::Quit) {
             self.should_quit = true;
+            return TurnResult::NotSpent;
+        }
+        if matches!(action, Action::Help) {
+            if matches!(self.screen, Screen::Help) {
+                self.close_help();
+            } else {
+                self.help_origin = Some(self.screen);
+                self.screen = Screen::Help;
+            }
             return TurnResult::NotSpent;
         }
 
@@ -153,9 +213,43 @@ impl Game {
                 Action::MoveLeft => self.move_player(-1, 0),
                 Action::MoveRight => self.move_player(1, 0),
                 Action::Wait => TurnResult::Spent,
+                Action::OpenInventory => {
+                    self.screen = Screen::Inventory;
+                    self.inventory_selection = 0;
+                    TurnResult::NotSpent
+                }
+                Action::Pickup => self.item_action(action),
                 _ => TurnResult::NotSpent,
             },
-            Screen::Inventory => TurnResult::NotSpent,
+            Screen::Inventory => match action {
+                Action::Wait
+                    if self
+                        .player
+                        .as_ref()
+                        .is_some_and(|player| !player.get_stats().is_dead()) =>
+                {
+                    TurnResult::Spent
+                }
+                Action::Back | Action::OpenInventory => {
+                    self.screen = Screen::Playing;
+                    TurnResult::NotSpent
+                }
+                Action::MoveUp => {
+                    self.inventory_selection = self.inventory_selection.saturating_sub(1);
+                    TurnResult::NotSpent
+                }
+                Action::MoveDown => {
+                    let last = self.inventory_rows().len().saturating_sub(1);
+                    self.inventory_selection = self.inventory_selection.saturating_add(1).min(last);
+                    TurnResult::NotSpent
+                }
+                Action::Pickup
+                | Action::UseItem
+                | Action::EquipItem
+                | Action::UnequipItem
+                | Action::DropItem => self.item_action(action),
+                _ => TurnResult::NotSpent,
+            },
             Screen::Paused => {
                 match action {
                     Action::Pause | Action::Confirm => self.screen = Screen::Playing,
@@ -164,9 +258,35 @@ impl Game {
                 }
                 TurnResult::NotSpent
             }
+            Screen::Help => {
+                if matches!(action, Action::Back | Action::Confirm) {
+                    self.close_help();
+                }
+                TurnResult::NotSpent
+            }
             Screen::GameOver => {
-                if matches!(action, Action::Confirm | Action::Back) {
-                    self.return_to_menu();
+                let last = self
+                    .log
+                    .history()
+                    .iter()
+                    .map(|message| message.lines().count())
+                    .sum::<usize>()
+                    .saturating_sub(1);
+                match action {
+                    Action::Confirm | Action::Back => self.return_to_menu(),
+                    Action::HistoryUp => {
+                        self.history_offset = self.history_offset.saturating_add(1).min(last)
+                    }
+                    Action::HistoryDown => {
+                        self.history_offset = self.history_offset.saturating_sub(1)
+                    }
+                    Action::HistoryPageUp => {
+                        self.history_offset = self.history_offset.saturating_add(10).min(last)
+                    }
+                    Action::HistoryPageDown => {
+                        self.history_offset = self.history_offset.saturating_sub(10)
+                    }
+                    _ => {}
                 }
                 TurnResult::NotSpent
             }
@@ -176,6 +296,104 @@ impl Game {
             self.advance_turn();
         }
         result
+    }
+
+    fn close_help(&mut self) {
+        self.screen = self.help_origin.take().unwrap_or(Screen::MainMenu);
+    }
+
+    /// Performs one item attempt; success and rejection share the combat boundary.
+    fn item_action(&mut self, action: &Action) -> TurnResult {
+        if !self
+            .player
+            .as_ref()
+            .is_some_and(|player| !player.get_stats().is_dead())
+        {
+            return TurnResult::NotSpent;
+        }
+        if matches!(action, Action::Pickup) {
+            self.pick_up_item();
+        } else {
+            let selected = self
+                .inventory_rows()
+                .get(self.inventory_selection)
+                .map(|(selection, item)| (*selection, item.name.clone()));
+            let message = match (action, selected) {
+                (Action::EquipItem, Some((InventorySelection::Carried(index), name))) => self
+                    .player
+                    .as_mut()
+                    .unwrap()
+                    .equip_carried(index)
+                    .map(|_| format!("You equip {name}.")),
+                (Action::UnequipItem, Some((InventorySelection::Equipped(slot), name))) => self
+                    .player
+                    .as_mut()
+                    .unwrap()
+                    .unequip(slot)
+                    .map(|_| format!("You unequip {name}.")),
+                (Action::UseItem, Some((InventorySelection::Carried(index), name))) => self
+                    .player
+                    .as_mut()
+                    .unwrap()
+                    .use_carried(index)
+                    .map(|healed| format!("You use {name} and restore {healed} HP.")),
+                (Action::DropItem, Some((selection, name))) => self
+                    .drop_item(selection)
+                    .map(|_| format!("You drop {name}.")),
+                (_, None) => Err(ItemError::Missing),
+                _ => Err(ItemError::WrongCategory),
+            };
+            self.log
+                .add_message(message.unwrap_or_else(|error| error.to_string()));
+        }
+        self.inventory_selection = self
+            .inventory_selection
+            .min(self.inventory_rows().len().saturating_sub(1));
+        TurnResult::Spent
+    }
+
+    /// Takes the first ground entry at the player's tile after checking capacity.
+    fn pick_up_item(&mut self) {
+        let (Some(player), Some(level)) = (self.player.as_mut(), self.level.as_mut()) else {
+            return;
+        };
+        let Some((index, entry)) = level.ground_items_at(player.get_position()).next() else {
+            self.log
+                .add_message("There is nothing here to pick up.".to_owned());
+            return;
+        };
+        if !player.get_inventory().can_accept(entry.item.kind) {
+            self.log.add_message(ItemError::Full.to_string());
+            return;
+        }
+        let entry = level
+            .remove_ground_item(index)
+            .expect("selected ground entry exists");
+        let message = format!("You pick up {}.", entry.item.name);
+        player
+            .receive_item(entry.item)
+            .expect("carried capacity was checked");
+        self.log.add_message(message);
+    }
+
+    /// Transfers a selected original item directly onto the validated player tile.
+    fn drop_item(&mut self, selection: InventorySelection) -> Result<(), ItemError> {
+        let (Some(player), Some(level)) = (self.player.as_mut(), self.level.as_mut()) else {
+            return Err(ItemError::Missing);
+        };
+        let position = player.get_position();
+        if !level.is_walkable(position) {
+            return Err(ItemError::WrongCategory);
+        }
+        let item = match selection {
+            InventorySelection::Carried(index) => player.take_carried(index),
+            InventorySelection::Equipped(slot) => player.take_equipped(slot),
+        }
+        .ok_or(ItemError::Missing)?;
+        level
+            .insert_ground_item(item, position)
+            .expect("player drop tile was validated");
+        Ok(())
     }
 
     /// The only spent-turn boundary: enemies, player effects, then enemy effects.
@@ -344,6 +562,8 @@ impl Game {
             return false;
         }
         if self.summary.is_none() {
+            self.history_offset = 0;
+            self.help_origin = None;
             let final_depth = self.level.as_ref().map_or(0, Level::depth);
             self.log.add_message(outcome.clone());
             self.summary = Some(GameSummary {
@@ -373,6 +593,9 @@ impl Game {
         self.level = Some(level);
         self.log.clear();
         self.summary = None;
+        self.inventory_selection = 0;
+        self.history_offset = 0;
+        self.help_origin = None;
         self.screen = Screen::Playing;
     }
 
@@ -487,12 +710,381 @@ impl Game {
         self.player = None;
         self.log.clear();
         self.summary = None;
+        self.inventory_selection = 0;
+        self.history_offset = 0;
+        self.help_origin = None;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_freezes_combat_and_restores_play_inventory_or_pause() {
+        use rand::RngExt;
+        for origin in [Screen::Playing, Screen::Inventory, Screen::Paused] {
+            for close in [Action::Help, Action::Back, Action::Confirm] {
+                let (mut game, id, _) = combat_game(0, 24, None);
+                game.player
+                    .as_mut()
+                    .unwrap()
+                    .update_health(0, Some(StatusEffect::new("Timer".into(), 0, 2)));
+                game.level.as_mut().unwrap().damage_enemy(
+                    id,
+                    0,
+                    Some(StatusEffect::new("Timer".into(), 0, 2)),
+                );
+                match origin {
+                    Screen::Inventory => {
+                        game.process_action(&Action::OpenInventory);
+                    }
+                    Screen::Paused => {
+                        game.process_action(&Action::Pause);
+                    }
+                    _ => {}
+                }
+                let position = game.player().unwrap().get_position();
+                let enemy_position = *game.level().unwrap().enemy(id).unwrap().position();
+                game.rng = StdRng::seed_from_u64(7);
+                assert_eq!(game.process_action(&Action::Help), TurnResult::NotSpent);
+                assert_eq!(*game.screen(), Screen::Help);
+                assert_eq!(game.help_origin(), Some(origin));
+                for action in [
+                    Action::Wait,
+                    Action::MoveUp,
+                    Action::UseItem,
+                    Action::Pickup,
+                    Action::Pause,
+                    Action::HistoryUp,
+                ] {
+                    assert_eq!(game.process_action(&action), TurnResult::NotSpent);
+                }
+                assert_eq!(game.process_action(&close), TurnResult::NotSpent);
+                assert_eq!(*game.screen(), origin);
+                assert_eq!(game.help_origin(), None);
+                assert_eq!(game.player().unwrap().get_position(), position);
+                assert_eq!(game.player().unwrap().get_stats().hp(), 200);
+                assert_eq!(
+                    game.player().unwrap().get_stats().status_effects()[0].turns_remaining(),
+                    2
+                );
+                assert_eq!(
+                    *game.level().unwrap().enemy(id).unwrap().position(),
+                    enemy_position
+                );
+                assert_eq!(
+                    game.level()
+                        .unwrap()
+                        .enemy(id)
+                        .unwrap()
+                        .stats()
+                        .status_effects()[0]
+                        .turns_remaining(),
+                    2
+                );
+                assert!(game.log.history().is_empty());
+                assert_eq!(
+                    game.rng.random::<u64>(),
+                    StdRng::seed_from_u64(7).random::<u64>()
+                );
+            }
+        }
+        let mut game = Game::new();
+        game.process_action(&Action::MoveDown);
+        game.process_action(&Action::Help);
+        game.process_action(&Action::Confirm);
+        assert_eq!(*game.screen(), Screen::MainMenu);
+        assert_eq!(game.menu_selection(), 1);
+        assert!(game.player().is_none());
+    }
+
+    #[test]
+    fn inventory_wait_spends_a_turn_without_moving_or_changing_items() {
+        let (mut game, _, _) = combat_game(0, 24, None);
+        let position = game.player().unwrap().get_position();
+        let equipment = game.player().unwrap().get_equipped_items().clone();
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(0, Some(StatusEffect::new("Timer".into(), 0, 2)));
+        game.process_action(&Action::OpenInventory);
+        assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
+        let player = game.player().unwrap();
+        assert_eq!(player.get_position(), position);
+        assert_eq!(player.get_equipped_items(), &equipment);
+        assert!(player.get_inventory().items().is_empty());
+        assert_eq!(player.get_stats().status_effects()[0].turns_remaining(), 1);
+        assert_eq!(
+            game.message_log()
+                .history()
+                .iter()
+                .filter(|message| message.contains("hits you"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn inventory_transfers_originals_and_each_item_action_spends_one_turn() {
+        let (mut game, enemy, _) = combat_game(0, 24, None);
+        game.level.as_mut().unwrap().remove_enemy(enemy);
+        let position = game.player().unwrap().get_position();
+        let custom = item::get_item(0).with_combat(item::CombatModifiers::weapon(
+            combat::DamageDice::new(1, combat::Die::D12),
+            Some(stats::EffectSpec::new("Burning".into(), 1, 2)),
+        ));
+        game.level
+            .as_mut()
+            .unwrap()
+            .insert_ground_item(custom.clone(), position)
+            .unwrap();
+        game.level
+            .as_mut()
+            .unwrap()
+            .insert_ground_item(item::get_item(2), position)
+            .unwrap();
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(-20, Some(StatusEffect::new("Timer".into(), 0, 20)));
+        assert_eq!(game.process_action(&Action::Pickup), TurnResult::Spent);
+        assert_eq!(game.process_action(&Action::Pickup), TurnResult::Spent);
+        assert_eq!(game.player().unwrap().get_inventory().items()[0], custom);
+        assert_eq!(
+            game.process_action(&Action::OpenInventory),
+            TurnResult::NotSpent
+        );
+        assert_eq!(game.process_action(&Action::EquipItem), TurnResult::Spent);
+        assert_eq!(
+            game.player().unwrap().get_equipped_items().weapon,
+            Some(custom.clone())
+        );
+        assert_eq!(
+            game.player().unwrap().weapon_effect().unwrap().name(),
+            "Burning"
+        );
+        assert_eq!(game.process_action(&Action::UseItem), TurnResult::Spent);
+        assert_eq!(game.player().unwrap().get_stats().hp(), 192);
+        assert_eq!(game.process_action(&Action::MoveDown), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::UnequipItem), TurnResult::Spent);
+        assert_eq!(
+            game.player().unwrap().damage_dice(),
+            combat::DamageDice::new(1, combat::Die::D4)
+        );
+        assert!(game.player().unwrap().weapon_effect().is_none());
+        assert_eq!(game.process_action(&Action::DropItem), TurnResult::Spent);
+        assert_eq!(game.level().unwrap().ground_items()[0].item, custom);
+        assert_eq!(game.level().unwrap().ground_items()[0].position, position);
+        assert_eq!(game.inventory_selection(), 0);
+        assert_eq!(game.process_action(&Action::EquipItem), TurnResult::Spent);
+        assert_eq!(
+            game.player().unwrap().damage_dice(),
+            combat::DamageDice::new(2, combat::Die::D4)
+        );
+        assert_eq!(
+            game.player().unwrap().get_stats().status_effects()[0].turns_remaining(),
+            13
+        );
+        game.process_action(&Action::Back);
+        assert!(matches!(game.screen(), Screen::Playing));
+        assert_eq!(
+            game.player().unwrap().get_stats().status_effects()[0].turns_remaining(),
+            13
+        );
+    }
+
+    #[test]
+    fn capacity_and_full_health_failures_keep_items_and_advance_combat_in_inventory() {
+        let (mut game, id, _) = combat_game(0, 24, None);
+        let position = game.player().unwrap().get_position();
+        game.player
+            .as_mut()
+            .unwrap()
+            .receive_item(item::get_item(1))
+            .unwrap();
+        game.level
+            .as_mut()
+            .unwrap()
+            .insert_ground_item(item::get_item(1), position)
+            .unwrap();
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(0, Some(StatusEffect::new("Timer".into(), 0, 5)));
+        game.level.as_mut().unwrap().damage_enemy(
+            id,
+            0,
+            Some(StatusEffect::new("Timer".into(), 0, 5)),
+        );
+        assert_eq!(game.process_action(&Action::Pickup), TurnResult::Spent);
+        assert_eq!(
+            game.player().unwrap().get_inventory().items(),
+            &[item::get_item(1)]
+        );
+        assert_eq!(
+            game.level().unwrap().ground_items()[0].item,
+            item::get_item(1)
+        );
+        assert_eq!(
+            game.player().unwrap().get_stats().status_effects()[0].turns_remaining(),
+            4
+        );
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()[0]
+                .turns_remaining(),
+            4
+        );
+        game.process_action(&Action::OpenInventory);
+        let hp = game.player().unwrap().get_stats().hp();
+        assert_eq!(game.process_action(&Action::UseItem), TurnResult::Spent);
+        assert!(game.player().unwrap().get_stats().hp() < hp);
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()[0]
+                .turns_remaining(),
+            3
+        );
+        // A full-health use fails before the enemy attacks and keeps the potion.
+        game.player.as_mut().unwrap().update_health(200, None);
+        game.player
+            .as_mut()
+            .unwrap()
+            .receive_item(item::get_item(2))
+            .unwrap();
+        game.inventory_selection = 1;
+        assert_eq!(game.process_action(&Action::UseItem), TurnResult::Spent);
+        assert_eq!(
+            game.player().unwrap().get_inventory().items()[1],
+            item::get_item(2)
+        );
+        assert!(
+            game.message_log()
+                .history()
+                .iter()
+                .any(|line| line.contains("potion is kept"))
+        );
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()[0]
+                .turns_remaining(),
+            2
+        );
+    }
+
+    #[test]
+    fn empty_pack_actions_fail_safely_and_equipped_items_can_be_dropped_and_recovered() {
+        let (mut game, id, _) = combat_game(0, 24, None);
+        game.level.as_mut().unwrap().remove_enemy(id);
+        game.process_action(&Action::OpenInventory);
+        assert_eq!(game.process_action(&Action::DropItem), TurnResult::Spent);
+        assert!(game.inventory_rows().is_empty());
+        assert_eq!(game.inventory_selection(), 0);
+        for action in [
+            Action::UseItem,
+            Action::EquipItem,
+            Action::UnequipItem,
+            Action::DropItem,
+        ] {
+            assert_eq!(game.process_action(&action), TurnResult::Spent);
+        }
+        assert_eq!(game.process_action(&Action::Pickup), TurnResult::Spent);
+        assert_eq!(
+            game.player().unwrap().get_inventory().items(),
+            &[item::get_item(0)]
+        );
+        assert_eq!(game.process_action(&Action::EquipItem), TurnResult::Spent);
+        assert_eq!(
+            game.player().unwrap().get_equipped_items().weapon,
+            Some(item::get_item(0))
+        );
+    }
+
+    #[test]
+    fn item_action_death_enters_game_over_and_keeps_the_result_message() {
+        let (mut game, _, _) = combat_game(0, 24, None);
+        game.player.as_mut().unwrap().update_health(-199, None);
+        game.process_action(&Action::OpenInventory);
+        assert_eq!(game.process_action(&Action::UseItem), TurnResult::Spent);
+        assert!(matches!(game.screen(), Screen::GameOver));
+        let log = game.message_log().history();
+        assert!(log[0].contains("cannot be used"));
+        assert!(log[1].contains("hits you for 1"));
+        assert!(game.summary().is_some());
+    }
+
+    #[test]
+    fn game_over_history_scrolls_full_multiline_history_without_turns_and_resets() {
+        use rand::RngExt;
+        let (mut game, _, _) = combat_game(0, 24, None);
+        game.log
+            .add_message("oldest first line\noldest second line".into());
+        for index in 0..60 {
+            game.log.add_message(format!("Message {index}"));
+        }
+        game.player.as_mut().unwrap().update_health(-199, None);
+        game.process_action(&Action::Wait);
+        let history = game.log.history().to_vec();
+        let summary = game.summary().unwrap().clone();
+        assert!(
+            !game
+                .log
+                .messages()
+                .iter()
+                .any(|line| line.contains("oldest"))
+        );
+        assert_eq!(game.history_offset(), 0);
+        game.rng = StdRng::seed_from_u64(7);
+        assert_eq!(
+            game.process_action(&Action::HistoryPageUp),
+            TurnResult::NotSpent
+        );
+        assert_eq!(game.history_offset(), 10);
+        game.process_action(&Action::Help);
+        game.process_action(&Action::HistoryPageUp);
+        assert_eq!(game.history_offset(), 10);
+        game.process_action(&Action::Back);
+        assert_eq!(*game.screen(), Screen::GameOver);
+        assert_eq!(game.history_offset(), 10);
+        for _ in 0..100 {
+            game.process_action(&Action::HistoryUp);
+        }
+        assert_eq!(game.history_offset(), 63);
+        game.process_action(&Action::HistoryDown);
+        assert_eq!(game.history_offset(), 62);
+        for _ in 0..10 {
+            game.process_action(&Action::HistoryPageDown);
+        }
+        assert_eq!(game.history_offset(), 0);
+        assert_eq!(game.summary(), Some(&summary));
+        assert_eq!(game.log.history(), history);
+        assert_eq!(game.player().unwrap().get_stats().hp(), 0);
+        assert_eq!(
+            game.rng.random::<u64>(),
+            StdRng::seed_from_u64(7).random::<u64>()
+        );
+        game.process_action(&Action::HistoryUp);
+        game.process_action(&Action::Confirm);
+        assert_eq!(game.history_offset(), 0);
+        assert_eq!(game.inventory_selection(), 0);
+        assert!(game.log.history().is_empty());
+        game.process_action(&Action::Confirm);
+        assert!(game.player().unwrap().get_inventory().items().is_empty());
+        assert!(game.summary().is_none());
+    }
 
     fn another_adjacent_enemy(game: &mut Game, kind: enemy::EnemyType) -> EnemyId {
         let start = game.player().unwrap().get_position();

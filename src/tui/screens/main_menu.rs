@@ -37,22 +37,21 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
     let title_width = TITLE.lines().map(str::len).max().unwrap_or(0) as u16;
     let banner = inner.width >= title_width && inner.height >= 9;
     let title_height = if banner { 5 } else { 1 };
-    // Preserve the full title and controls before making room for the portrait.
-    let logo_height = if inner.height >= 12 + title_height + 4 && inner.width >= 34 {
+    // Preserve the title and menu before making room for the portrait.
+    let logo_height = if inner.height >= 12 + title_height + 3 && inner.width >= 34 {
         12
     } else {
         0
     };
     let gap = inner
         .height
-        .saturating_sub(logo_height + title_height + 3)
+        .saturating_sub(logo_height + title_height + 2)
         .min(1);
-    let [logo, title, _, menu, help] = Layout::vertical([
+    let [logo, title, _, menu] = Layout::vertical([
         Constraint::Length(logo_height),
         Constraint::Length(title_height),
         Constraint::Length(gap),
         Constraint::Min(2),
-        Constraint::Length(1),
     ])
     .areas(inner);
     if logo_height > 0 {
@@ -81,5 +80,4 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
         menu,
         &mut state,
     );
-    frame.render_widget(Paragraph::new(view.help).style(theme.muted), help);
 }

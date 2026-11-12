@@ -7,12 +7,39 @@
 //! Player does not validate terrain or resolve combat; Game coordinates those.
 
 use crate::game::combat::{DamageDice, Die};
-use crate::game::equipment::Equipment;
+use crate::game::equipment::{Equipment, EquipmentSlot};
 use crate::game::inventory::Inventory;
-use crate::game::item::ItemType;
+use crate::game::item::{Item, ItemType};
 use crate::game::position::Position;
 use crate::game::stats::{Stats, StatusEffect};
 use rand::Rng;
+
+/// A rejected item action leaves ownership and player state unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemError {
+    /// The selected entry or equipment slot is empty.
+    Missing,
+    /// The selected item cannot perform that action.
+    WrongCategory,
+    /// The item's carried category is full.
+    Full,
+    /// Healing would have no effect.
+    FullHealth,
+    /// A dead player cannot use items.
+    Dead,
+}
+
+impl std::fmt::Display for ItemError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Missing => "No item is selected.",
+            Self::WrongCategory => "That item cannot be used for this action.",
+            Self::Full => "That inventory category is full.",
+            Self::FullHealth => "You are already at full health; the potion is kept.",
+            Self::Dead => "You cannot use items after death.",
+        })
+    }
+}
 
 /// Represents and manages the player state.
 pub struct Player {
@@ -23,6 +50,85 @@ pub struct Player {
 }
 
 impl Player {
+    /// Transfers an existing floor or dropped item into the pack.
+    pub fn receive_item(&mut self, item: Item) -> Result<(), Item> {
+        self.inventory.insert_item(item)
+    }
+
+    /// Takes one carried entry without confusing duplicate catalog copies.
+    pub fn take_carried(&mut self, index: usize) -> Option<Item> {
+        self.inventory.remove_entry(index)
+    }
+
+    /// Takes an equipped item for a direct drop onto a validated floor tile.
+    pub fn take_equipped(&mut self, slot: EquipmentSlot) -> Option<Item> {
+        self.equipment.take(slot)
+    }
+
+    /// Swaps a carried weapon or armor into its slot, preserving both copies.
+    pub fn equip_carried(&mut self, index: usize) -> Result<(), ItemError> {
+        let item = self
+            .inventory
+            .items()
+            .get(index)
+            .ok_or(ItemError::Missing)?;
+        if item.kind == ItemType::Consumable {
+            return Err(ItemError::WrongCategory);
+        }
+        let item = self
+            .inventory
+            .remove_entry(index)
+            .expect("selected entry exists");
+        let displaced = self
+            .equipment
+            .equip(item)
+            .expect("selected category is equipment");
+        if let Some(displaced) = displaced {
+            // Removing the selected item freed a space in this same category.
+            self.inventory
+                .insert_item(displaced)
+                .expect("equipment swap freed category capacity");
+        }
+        Ok(())
+    }
+
+    /// Moves equipment back to the pack; a full category preserves both stores.
+    pub fn unequip(&mut self, slot: EquipmentSlot) -> Result<(), ItemError> {
+        let item = self.equipment.item(slot).ok_or(ItemError::Missing)?;
+        if !self.inventory.can_accept(item.kind) {
+            return Err(ItemError::Full);
+        }
+        let item = self.equipment.take(slot).expect("selected slot exists");
+        self.inventory
+            .insert_item(item)
+            .expect("category capacity was checked");
+        Ok(())
+    }
+
+    /// Consumes exactly one healing item on success and returns actual HP restored.
+    pub fn use_carried(&mut self, index: usize) -> Result<i32, ItemError> {
+        if self.stats.is_dead() {
+            return Err(ItemError::Dead);
+        }
+        let item = self
+            .inventory
+            .items()
+            .get(index)
+            .ok_or(ItemError::Missing)?;
+        if item.kind != ItemType::Consumable {
+            return Err(ItemError::WrongCategory);
+        }
+        let healing = item.healing().ok_or(ItemError::WrongCategory)?;
+        if self.stats.hp() == self.stats.max_hp() {
+            return Err(ItemError::FullHealth);
+        }
+        self.inventory
+            .remove_entry(index)
+            .expect("selected consumable exists");
+        let old_hp = self.stats.hp();
+        self.stats.update_health(healing);
+        Ok(self.stats.hp() - old_hp)
+    }
     /// Creates the player. Called by Game when a new game starts (Game Contract 1)
     pub fn new(
         position: Position,
@@ -120,6 +226,86 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::{Equipment, Inventory, Player, Position, Stats, StatusEffect};
+
+    #[test]
+    fn full_pack_weapon_swaps_preserve_original_dice_and_effects() {
+        use super::{EquipmentSlot, ItemError};
+        use crate::game::{
+            combat::{DamageDice, Die},
+            item::{CombatModifiers, get_item},
+            stats::EffectSpec,
+        };
+        let mut p = player();
+        let original = get_item(0);
+        p.equipment.equip(original.clone()).unwrap();
+        let custom = get_item(0).with_combat(CombatModifiers::weapon(
+            DamageDice::new(1, Die::D12),
+            Some(EffectSpec::new("Burning".into(), 2, 2)),
+        ));
+        p.receive_item(custom.clone()).unwrap();
+        p.receive_item(get_item(0)).unwrap();
+        p.receive_item(get_item(0)).unwrap();
+        p.equip_carried(0).unwrap();
+        assert_eq!(p.equipment.weapon, Some(custom));
+        assert_eq!(p.inventory.items().len(), 3);
+        assert_eq!(p.inventory.items()[2], original);
+        assert_eq!(p.damage_dice(), DamageDice::new(1, Die::D12));
+        assert_eq!(p.weapon_effect().unwrap().name(), "Burning");
+        let before = p.inventory.items().to_vec();
+        assert_eq!(p.unequip(EquipmentSlot::Weapon), Err(ItemError::Full));
+        assert_eq!(p.inventory.items(), before);
+        assert_eq!(p.damage_dice(), DamageDice::new(1, Die::D12));
+        p.take_carried(0);
+        p.unequip(EquipmentSlot::Weapon).unwrap();
+        assert_eq!(p.damage_dice(), DamageDice::new(1, Die::D4));
+        assert!(p.weapon_effect().is_none());
+    }
+
+    #[test]
+    fn potion_use_preserves_rejections_and_consumes_only_the_selected_copy() {
+        use super::ItemError;
+        use crate::game::item::get_item;
+        let mut p = player();
+        p.receive_item(get_item(2)).unwrap();
+        let custom = get_item(2).with_healing(3);
+        p.receive_item(custom.clone()).unwrap();
+        assert_eq!(p.use_carried(0), Err(ItemError::FullHealth));
+        assert_eq!(p.inventory.items().len(), 2);
+        p.update_health(-5, None);
+        assert_eq!(p.use_carried(1), Ok(3));
+        assert_eq!(p.inventory.items(), &[get_item(2)]);
+        assert_eq!(p.use_carried(0), Ok(2));
+        assert!(p.inventory.items().is_empty());
+        assert_eq!(p.use_carried(0), Err(ItemError::Missing));
+        p.receive_item(get_item(0)).unwrap();
+        assert_eq!(p.use_carried(0), Err(ItemError::WrongCategory));
+        p.update_health(-100, None);
+        assert_eq!(p.use_carried(0), Err(ItemError::Dead));
+        assert_eq!(p.inventory.items(), &[get_item(0)]);
+    }
+
+    #[test]
+    fn armor_swaps_change_effective_defense_and_full_unequip_is_atomic() {
+        use super::{EquipmentSlot, ItemError};
+        use crate::game::item::{CombatModifiers, get_item};
+        let mut p = player();
+        p.receive_item(get_item(1)).unwrap();
+        p.equip_carried(0).unwrap();
+        assert_eq!(p.effective_defense(), 6);
+        let better = get_item(1).with_combat(CombatModifiers::armor(4));
+        p.receive_item(better.clone()).unwrap();
+        p.equip_carried(0).unwrap();
+        assert_eq!(p.effective_defense(), 9);
+        assert_eq!(p.inventory.items(), &[get_item(1)]);
+        assert_eq!(p.unequip(EquipmentSlot::Armor), Err(ItemError::Full));
+        assert_eq!(p.equipment.armor, Some(better.clone()));
+        assert_eq!(p.inventory.items(), &[get_item(1)]);
+        p.take_carried(0);
+        p.unequip(EquipmentSlot::Armor).unwrap();
+        assert_eq!(p.inventory.items(), &[better]);
+        assert_eq!(p.effective_defense(), 5);
+        assert_eq!(p.stats.defense(), 5);
+    }
 
     #[test]
     fn equipment_queries_are_repeatable_and_follow_unequipping() {
