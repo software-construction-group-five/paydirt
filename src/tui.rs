@@ -103,6 +103,8 @@ pub struct RenderView<'a> {
     pub level: Option<LevelView<'a>>,
     /// Player status, if available.
     pub status: StatusView<'a>,
+    /// Cumulative session results for the pause overview.
+    pub session_stats: crate::game::SessionStats,
     /// Session messages in chronological order.
     pub messages: &'a [&'a str],
     /// Inventory entries in display order.
@@ -172,12 +174,18 @@ impl Renderer {
             Screen::Inventory => screens::inventory::draw(frame, view, &self.theme),
             Screen::Paused => {
                 screens::playing::draw(frame, view, &self.theme);
-                screens::paused::draw(frame, &self.theme);
+                screens::paused::draw(frame, view, &self.theme);
             }
             Screen::GameOver => screens::game_over::draw(frame, view, &self.theme),
         }
         if matches!(screen, Screen::Help) {
-            screens::paused::draw_overlay(frame, &self.theme, " Help ", view.help);
+            screens::paused::draw_overlay(
+                frame,
+                &self.theme,
+                " Help ",
+                view.help,
+                ratatui::layout::Alignment::Left,
+            );
         }
     }
 }
@@ -207,16 +215,35 @@ mod tests {
         let help = draw_screen(80, 24, Screen::Help, &view);
         let pause = draw_screen(80, 24, Screen::Paused, &view);
         assert!(text(&help).contains("x: wait"));
-        // Both notices have two lines here, so only text inside the shared
-        // centered 40x5 panel may differ from the pause frame.
-        for y in 0..24 {
-            for x in 0..80 {
-                if !(20..60).contains(&x) || !(9..14).contains(&y) {
-                    assert_eq!(help[(x, y)], pause[(x, y)]);
-                }
-            }
+        assert!(text(&pause).contains("PAUSED"));
+        assert!(text(&pause).contains("Enemies slain: 0"));
+        assert_eq!(help[(20, 9)].fg, pause[(20, 8)].fg);
+        let map = crate::game::level::map::Map::new(1, 1);
+        let mut level = LevelView::new(&map);
+        level.depth = Some(7);
+        let overview = RenderView {
+            level: Some(level),
+            status: StatusView {
+                turns_and_fuel: Some((56, 144)),
+                ..Default::default()
+            },
+            session_stats: crate::game::SessionStats {
+                enemies_slain: 12,
+                items_acquired: 34,
+            },
+            ..Default::default()
+        };
+        let pause = draw_screen(80, 24, Screen::Paused, &overview);
+        for (y, label) in [
+            (9, "PAUSED"),
+            (11, "Depth: 7"),
+            (12, "Turns: 56"),
+            (13, "Enemies slain: 12"),
+            (14, "Items acquired: 34"),
+        ] {
+            let row: String = (21..59).map(|x| pause[(x, y)].symbol()).collect();
+            assert!(row.starts_with(label));
         }
-        assert_eq!(help[(20, 9)].fg, pause[(20, 9)].fg);
     }
 
     #[test]

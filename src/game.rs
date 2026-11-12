@@ -44,6 +44,15 @@ pub struct GameSummary {
     pub outcome: String,
 }
 
+/// Cumulative results for the current session, retained across floor transitions.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SessionStats {
+    /// Enemies defeated by direct hits, splash damage, or status effects.
+    pub enemies_slain: u64,
+    /// Successful ground-item pickups, including reacquired dropped items.
+    pub items_acquired: u64,
+}
+
 /// A selectable owned copy, independent of the item's catalog index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InventorySelection {
@@ -63,6 +72,7 @@ pub struct Game {
     rng: StdRng,
     should_quit: bool,
     summary: Option<GameSummary>,
+    session_stats: SessionStats,
     inventory_selection: usize,
     history_offset: usize,
     help_origin: Option<Screen>,
@@ -86,6 +96,7 @@ impl Game {
             rng: StdRng::from_rng(&mut rand::rng()),
             should_quit: false,
             summary: None,
+            session_stats: SessionStats::default(),
             inventory_selection: 0,
             history_offset: 0,
             help_origin: None,
@@ -120,6 +131,11 @@ impl Game {
     /// Borrows the final results, absent during an active or unstarted session.
     pub fn summary(&self) -> Option<&GameSummary> {
         self.summary.as_ref()
+    }
+
+    /// Cumulative session counts for the pause overview.
+    pub fn session_stats(&self) -> SessionStats {
+        self.session_stats
     }
 
     /// Selected inventory row, clamped after any item transfer.
@@ -409,6 +425,7 @@ impl Game {
         player
             .receive_item(entry.item)
             .expect("carried capacity was checked");
+        self.session_stats.items_acquired = self.session_stats.items_acquired.saturating_add(1);
         self.log.add_message(message);
     }
 
@@ -676,6 +693,7 @@ impl Game {
         self.level = Some(level);
         self.log.clear();
         self.summary = None;
+        self.session_stats = SessionStats::default();
         self.inventory_selection = 0;
         self.history_offset = 0;
         self.help_origin = None;
@@ -817,6 +835,7 @@ impl Game {
         let Some(enemy) = level.remove_enemy(id) else {
             return;
         };
+        self.session_stats.enemies_slain = self.session_stats.enemies_slain.saturating_add(1);
         self.log
             .add_message(format!("You defeat {}.", enemy.kind()));
         if let Some(item) = equipment_drop(level.depth(), item::catalog(), &mut self.rng) {
@@ -835,6 +854,7 @@ impl Game {
         self.player = None;
         self.log.clear();
         self.summary = None;
+        self.session_stats = SessionStats::default();
         self.inventory_selection = 0;
         self.history_offset = 0;
         self.help_origin = None;
@@ -844,6 +864,47 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pause_overview_counts_successes_once_and_survives_descent() {
+        let (mut game, id, action) = combat_game(100, 1, None);
+        game.process_action(&action);
+        assert_eq!(game.session_stats().enemies_slain, 1);
+        game.defeat_enemy(id);
+        assert_eq!(game.session_stats().enemies_slain, 1);
+        let position = game.player().unwrap().get_position();
+        game.level
+            .as_mut()
+            .unwrap()
+            .insert_ground_item(item::get_item(2), position)
+            .unwrap();
+        game.process_action(&Action::Pickup);
+        game.process_action(&Action::Pickup); // Empty tile is not an acquisition.
+        assert_eq!(game.session_stats().items_acquired, 1);
+        game.process_action(&Action::OpenInventory);
+        game.process_action(&Action::DropItem);
+        game.process_action(&Action::Pickup); // Reacquiring a dropped copy counts.
+        assert_eq!(game.session_stats().items_acquired, 2);
+        game.process_action(&Action::Back);
+        let stairs = game.level().unwrap().stairs_down();
+        game.player.as_mut().unwrap().set_position(stairs);
+        game.process_action(&Action::Descend);
+        assert_eq!(
+            game.session_stats(),
+            SessionStats {
+                enemies_slain: 1,
+                items_acquired: 2
+            }
+        );
+        game.process_action(&Action::Pause);
+        game.process_action(&Action::Help);
+        game.process_action(&Action::Help);
+        assert_eq!(game.session_stats().items_acquired, 2);
+        game.process_action(&Action::Back);
+        assert_eq!(game.session_stats(), SessionStats::default());
+        game.process_action(&Action::Confirm);
+        assert_eq!(game.session_stats(), SessionStats::default());
+    }
 
     #[test]
     fn lamp_counts_spent_actions_refuels_and_resets() {

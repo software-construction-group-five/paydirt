@@ -130,6 +130,7 @@ fn with_view<R>(
         effects: &effect_names,
     };
     let view = RenderView {
+        session_stats: game.session_stats(),
         level,
         status,
         messages: &messages,

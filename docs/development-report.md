@@ -51,6 +51,8 @@ A normal application cycle is:
 
 The application begins at the main menu without generating a floor. Starting a game generates depth zero, creates a full-health player with an equipped Pickaxe, initializes visibility, and clears previous session information. The controller supports Playing, Inventory, Paused, GameOver, and Help screens in addition to MainMenu.
 
+The pause panel shows PAUSED followed by a left-aligned overview of current depth, elapsed turns, cumulative enemies slain, and cumulative successful ground-item pickups. Direct and effect kills count once; reacquired dropped items count again, while starting gear and failed pickups do not. Counts persist across floors and reset with the session.
+
 Help remembers the underlying screen so closing the overlay restores its inventory selection or history position. Pause and help freeze gameplay. Returning to the main menu clears the active session; restarting creates new player and floor state.
 
 ## Levels, generation, and entity storage
@@ -205,7 +207,7 @@ cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings
 ```
 
-The test suite passed **211 tests**: 208 library tests, two executable tests, and one documentation test. Coverage includes generation reproducibility and connectivity, spawn restrictions, visibility, AI decisions, dice calculations, drops, effect timing, inventory ownership, rejected actions, descent and overflow, death handling, restart, help, configuration parsing, and rendering across small/resized test backends.
+The test suite passed **212 tests**: 209 library tests, two executable tests, and one documentation test. Coverage includes generation reproducibility and connectivity, spawn restrictions, visibility, AI decisions, dice calculations, drops, effect timing, inventory ownership, rejected actions, descent and overflow, death handling, restart, help, configuration parsing, and rendering across small/resized test backends.
 
 Three new visibility regressions cover diagonal boundary walls in square and rectangular rooms, hidden terrain behind diagonal walls, and the vision-range boundary for floors and walls with exploration memory retained after moving away. Movement and door-opening tests now verify visibility against both terrain line of sight and the player’s lamp range cap.
 

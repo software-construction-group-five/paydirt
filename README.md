@@ -25,7 +25,11 @@ Default glyphs are `g` (red Goblin), `G` (white Ghost), `s` (green Slime),
 `)` (yellow weapon), `[` (cyan armor), and `!` (magenta consumable).
 
 `cargo run` opens the main menu. Select New Game to generate and display a floor.
-Esc pauses, Esc or Enter resumes, and m returns to the main menu. The launcher
+Esc pauses, Esc or Enter resumes, and m returns to the main menu.
+The pause panel begins with `PAUSED`, followed by a left-aligned session overview:
+current depth, elapsed turns, enemies slain (including effect kills), and items acquired
+(successful pickups, including reacquired drops; starting gear is excluded).
+These counts persist across floors and reset for each new session. The launcher
 loads both configuration files relative to the project root.
 
 ## Keybindings
