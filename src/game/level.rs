@@ -7,7 +7,11 @@ pub mod map;
 
 use std::collections::{BTreeMap, HashSet};
 
-use crate::game::{enemy::Enemy, item::Item, position::Position};
+use crate::game::{
+    enemy::{AiState, Enemy},
+    item::Item,
+    position::Position,
+};
 use map::Map;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -160,6 +164,16 @@ impl Level {
     /// Looks up an enemy by its floor-local ID; removed or unknown IDs are absent.
     pub fn enemy(&self, id: EnemyId) -> Option<&Enemy> {
         self.enemies.get(&id)
+    }
+
+    /// Applies a decision state to the identified enemy (contract 13).
+    /// Unknown IDs leave all other enemies unchanged.
+    pub fn set_enemy_ai_state(&mut self, id: EnemyId, state: AiState) -> bool {
+        let Some(enemy) = self.enemies.get_mut(&id) else {
+            return false;
+        };
+        enemy.set_ai_state(state);
+        true
     }
 
     /// Finds the enemy occupying a tile, independently of terrain walkability.
@@ -355,6 +369,18 @@ mod tests {
             [second, third]
         );
         assert_eq!(level.enemy_at(Position::new(1, 1)), Some(third));
+    }
+
+    #[test]
+    fn applying_ai_state_by_id_preserves_enemy_identity_and_position() {
+        let mut level = empty_level();
+        let id = insert(&mut level, 1);
+        let position = *level.enemy(id).unwrap().position();
+        assert!(level.set_enemy_ai_state(id, AiState::Attacking));
+        assert!(matches!(level.enemy(id).unwrap().ai(), AiState::Attacking));
+        assert_eq!(*level.enemy(id).unwrap().position(), position);
+        level.remove_enemy(id);
+        assert!(!level.set_enemy_ai_state(id, AiState::Idle));
     }
 
     #[test]

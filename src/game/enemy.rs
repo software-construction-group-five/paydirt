@@ -92,24 +92,12 @@ impl Enemy {
         self.position = new_position;
     }
 
-    /// Updates behavior using the existing health threshold rules.
+    /// Updates health-related AI behavior (SDD Contract 13).
     pub fn update_status(&mut self) {
-        match self.ai {
-            AiState::Attacking => {
-                self.ai = if self.stats.hp() >= self.flee_below_hp {
-                    AiState::Attacking
-                } else {
-                    AiState::Fleeing
-                }
-            } // continue attacking unless below a certain hp
-            AiState::Fleeing => self.ai = AiState::Fleeing, //continue fleeing
-            AiState::Idle => {
-                self.ai = if self.stats.hp() >= self.flee_below_hp {
-                    AiState::Attacking
-                } else {
-                    AiState::Fleeing
-                }
-            }
+        if self.stats.is_dead() {
+            self.ai = AiState::Idle;
+        } else if self.stats.hp() < self.flee_below_hp {
+            self.ai = AiState::Fleeing;
         }
     }
 
@@ -122,6 +110,20 @@ impl Enemy {
     /// Returns the fixed base attack value; no random roll is performed.
     pub fn get_roll(&self) -> i32 {
         self.stats.attack()
+    }
+
+    /// Returns the species' fleeing threshold (SDD Contracts 12 and 13).
+    pub fn flee_below_hp(&self) -> i32 {
+        self.flee_below_hp
+    }
+
+    /// Stores the AI state selected for this turn (SDD Contract 13).
+    pub fn set_ai_state(&mut self, state: AiState) {
+        self.ai = if self.stats.is_dead() {
+            AiState::Idle
+        } else {
+            state
+        };
     }
 }
 
@@ -139,13 +141,16 @@ mod tests {
         let a = Enemy::new(EnemyType::Goblin, Position::new(4, 3));
         assert_eq!(a.get_roll(), 3);
     }
-    //Test that update_status changes ai Attacking
+
     #[test]
-    fn update_status_changes_to_attacking() {
-        let mut a = Enemy::new(EnemyType::Goblin, Position::new(4, 3));
-        a.update_status();
-        assert_matches!(a.ai(), AiState::Attacking);
+    fn update_status_does_not_wake_idle_enemy() {
+        let mut enemy = Enemy::new(EnemyType::Goblin, Position::new(4, 3));
+
+        enemy.update_status();
+
+        assert!(matches!(enemy.ai(), AiState::Idle));
     }
+
     //Test that take damage bellow a certain level runs update_status which then changes ai to Fleeing
     #[test]
     fn take_damage_and_update_status_changes_from_idle_to_fleeing() {
@@ -157,11 +162,16 @@ mod tests {
     //Test that take damage bellow a certain level runs update_status which then changes ai to Fleeing
     #[test]
     fn take_damage_and_update_status_changes_from_attacking_to_fleeing() {
-        let mut a = Enemy::new(EnemyType::Goblin, Position::new(4, 3));
-        a.update_status(); //change enemy state from Idle to Attacking
-        assert_matches!(a.ai(), AiState::Attacking); //confirm it switches to attacking
-        a.take_damage(-16); //25-16=9 which is when Goblin should first begin to flee
-        assert_eq!(a.stats().hp(), 9); //check hp correctly updated
-        assert_matches!(a.ai(), AiState::Fleeing); //check ai state correctly updated to fleeing
+        let mut enemy = Enemy::new(EnemyType::Goblin, Position::new(4, 3));
+
+        // Simulate Game applying the AI's attacking decision.
+        enemy.set_ai_state(AiState::Attacking);
+        assert!(matches!(enemy.ai(), AiState::Attacking));
+
+        // Goblin starts with 25 HP. Fleeing threshold is 10 HP.
+        enemy.take_damage(-16);
+
+        assert_eq!(enemy.stats().hp(), 9);
+        assert!(matches!(enemy.ai(), AiState::Fleeing));
     }
 }
