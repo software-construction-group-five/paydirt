@@ -5,6 +5,7 @@
 //! 2. Game State Access
 
 pub mod action;
+pub mod combat;
 pub mod enemy;
 pub mod equipment;
 pub mod inventory;

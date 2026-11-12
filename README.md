@@ -5,7 +5,9 @@ A terminal roguelike about Paydirt Pete's daring escape from the mine
 The phase 1 [combat and turn contracts](docs/combat-turns.md) define damage,
 turn order, equipment drops, descent, and game-over message history. Scaled stats,
 equipment modifiers, reusable weapon effects, enemy effect operations, and AI
-intent types are implemented. Attack resolution and turn scheduling remain
+intent types are implemented. Phase 2 adds pure damage calculation and controlled
+enemy damage/effect updates through Level, reporting actual HP loss and death.
+Attack resolution through player actions and turn scheduling remain
 unfinished; drops and game-over history controls follow in later phases.
 
 ## Theme configuration
