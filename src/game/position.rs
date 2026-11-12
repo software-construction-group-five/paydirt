@@ -24,11 +24,39 @@ impl Position {
     pub fn distance(self, other: Position) -> usize {
         self.x.abs_diff(other.x).max(self.y.abs_diff(other.y))
     }
+
+    /// Whether another tile is in cardinal attack range, without distance overflow.
+    pub fn is_cardinal_neighbor(self, other: Position) -> bool {
+        (self.x == other.x && self.y.abs_diff(other.y) == 1)
+            || (self.y == other.y && self.x.abs_diff(other.x) == 1)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Position;
+
+    #[test]
+    fn attack_range_excludes_diagonals_self_and_distant_or_extreme_tiles() {
+        let origin = Position::new(1, 1);
+        for neighbor in [
+            Position::new(0, 1),
+            Position::new(2, 1),
+            Position::new(1, 0),
+            Position::new(1, 2),
+        ] {
+            assert!(origin.is_cardinal_neighbor(neighbor));
+            assert!(neighbor.is_cardinal_neighbor(origin));
+        }
+        for other in [
+            origin,
+            Position::new(2, 2),
+            Position::new(3, 1),
+            Position::new(usize::MAX, usize::MAX),
+        ] {
+            assert!(!origin.is_cardinal_neighbor(other));
+        }
+    }
 
     #[test]
     fn distance_counts_diagonal_as_one_move() {

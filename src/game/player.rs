@@ -55,6 +55,39 @@ impl Player {
         &self.equipment
     }
 
+    /// Returns base attack plus the equipped weapon bonus, without mutation.
+    pub fn effective_attack(&self) -> i32 {
+        self.stats.attack().saturating_add(
+            self.equipment
+                .weapon
+                .as_ref()
+                .filter(|item| item.kind == crate::game::item::ItemType::Weapon)
+                .map_or(0, |item| item.combat().attack()),
+        )
+    }
+
+    /// Returns base defense plus the equipped armor bonus, without mutation.
+    pub fn effective_defense(&self) -> i32 {
+        self.stats.defense().saturating_add(
+            self.equipment
+                .armor
+                .as_ref()
+                .filter(|item| item.kind == crate::game::item::ItemType::Armor)
+                .map_or(0, |item| item.combat().defense()),
+        )
+    }
+
+    /// Creates a fresh weapon effect; Game applies it after a valid nonlethal hit.
+    pub fn weapon_effect(&self) -> Option<StatusEffect> {
+        self.equipment
+            .weapon
+            .as_ref()
+            .filter(|item| item.kind == crate::game::item::ItemType::Weapon)?
+            .combat()
+            .on_hit()
+            .map(|spec| spec.instantiate())
+    }
+
     /// Contract 7, Protocol 1. Game checks the tile is walkable first
     pub fn set_position(&mut self, position: Position) {
         self.position = position;
@@ -78,6 +111,59 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::{Equipment, Inventory, Player, Position, Stats, StatusEffect};
+
+    #[test]
+    fn equipment_queries_are_repeatable_saturating_and_follow_unequipping() {
+        use crate::game::item::{CombatModifiers, get_item};
+        let mut p = player();
+        p.equipment.equip(get_item(0)).unwrap();
+        p.equipment.equip(get_item(1)).unwrap();
+        for _ in 0..3 {
+            assert_eq!((p.effective_attack(), p.effective_defense()), (18, 8));
+            assert_eq!((p.stats.attack(), p.stats.defense()), (15, 5));
+        }
+        p.equipment
+            .equip(get_item(0).with_combat(CombatModifiers::weapon(i32::MAX, None)))
+            .unwrap();
+        p.equipment
+            .equip(get_item(1).with_combat(CombatModifiers::armor(i32::MAX)))
+            .unwrap();
+        assert_eq!(
+            (p.effective_attack(), p.effective_defense()),
+            (i32::MAX, i32::MAX)
+        );
+        p.equipment.unequip_weapon();
+        p.equipment.unequip_armor();
+        assert_eq!((p.effective_attack(), p.effective_defense()), (15, 5));
+    }
+
+    #[test]
+    fn weapon_hits_create_independent_enemy_effect_durations() {
+        use crate::game::{
+            enemy::{AiState, Enemy, EnemyType},
+            item::{CombatModifiers, get_item},
+            stats::EffectSpec,
+        };
+        let mut p = player();
+        let weapon = get_item(0).with_combat(CombatModifiers::weapon(
+            3,
+            Some(EffectSpec::new("Poison".into(), 7, 3)),
+        ));
+        p.equipment.equip(weapon).unwrap();
+        let mut enemy = Enemy::new(EnemyType::Ghost, Position::new(2, 1));
+        enemy.add_status_effect(p.weapon_effect().unwrap());
+        assert_eq!(enemy.stats().hp(), 50);
+        assert_eq!(enemy.tick_status_effects(), 7);
+        enemy.add_status_effect(p.weapon_effect().unwrap());
+        assert_eq!(enemy.stats().status_effects()[0].turns_remaining(), 2);
+        assert_eq!(enemy.stats().status_effects()[1].turns_remaining(), 3);
+        assert_eq!(enemy.tick_status_effects(), 14);
+        assert_eq!(enemy.tick_status_effects(), 14);
+        assert!(matches!(enemy.ai(), AiState::Fleeing));
+        assert_eq!(enemy.tick_status_effects(), 7);
+        assert!(enemy.stats().status_effects().is_empty());
+        assert_eq!(p.weapon_effect().unwrap().turns_remaining(), 3);
+    }
 
     fn player() -> Player {
         Player::new(

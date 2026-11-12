@@ -37,7 +37,7 @@
 <p>Several branches change Game, Player, actions, keybindings, and display data. Keep those edits small and merge often. Combat owns the turn loop; other branches report what the player did.</p></section>
 <section id="undecided">
 <h2>Undecided</h2>
-<ul><li>Inventory and combat: how do weapons, armor, and consumables affect stats?</li>
+<ul><li>Consumable effects and healing values remain to be defined. Weapon attack bonuses, armor defense bonuses, and weapon on-hit effects are specified in <a href="docs/combat-turns.md">the combat contract</a>; initial balance values require playtesting.</li>
 <li>Item catalog: which items, armor, and weapons will be added to the game?</li></ul>
 </section>
 <section id="player-movement">
@@ -89,14 +89,14 @@
 <section id="combat-turns">
 <h2 class="branch">feature/combat-turns</h2>
 <p class="lede">Resolve attacks and advance the game one turn at a time.</p>
-<p><strong>When:</strong> Plan damage rules and turn order now. Connect the full loop after movement, entities, and AI. Agree equipment effects with inventory-gameplay before final checks.</p>
+<p><strong>Status:</strong> Phase 1 foundation is implemented: scaled stats, equipment modifiers, reusable weapon effect specifications, effective-stat queries, enemy effect operations, cardinal range queries, and AI intents. <a href="docs/combat-turns.md">Combat and turn contracts</a> specify the remaining attack resolution, turn loop, rare depth-appropriate drops, descent timing, and game-over message history. Connect the full loop after movement, entities, and AI; coordinate item data with inventory-gameplay.</p>
 <ul class="tasks">
-<li><h3>Set damage rules <span class="contract">(SDD Contracts 2, 14)</span></h3><p>Define damage from attacker attack, defender defense, and equipment effects once those effects are decided. Specify minimum damage and any randomness. Decide whether a player move into an enemy becomes an attack. Current enemy attack values are fixed.</p></li>
+<li class="done"><h3>Set damage rules <span class="contract">(SDD Contracts 2, 14)</span></h3><p>Specified: deterministic max(1, effective attack − effective defense), cardinal bump attacks without movement, additive equipment bonuses, on-hit weapon effects, and initial scaled combat stats. The combat contract defines turn order, death/drop behavior, descent, and interface responsibilities. Implement these rules in the remaining phases.</p></li>
 <li><h3>Apply attacks <span class="contract">(SDD Contracts 2, 7, 10, 13, 14)</span></h3><p>Game selects the defender by enemy ID or the active Player. Apply the calculated health change through the existing stats methods. Update surviving enemies’ states; remove dead enemies through Level. Append attack and damage results to MessageLog.</p></li>
 <li><h3>Run one turn loop <span class="contract">(SDD Contract 2)</span></h3><p>Game processes one gameplay action, then runs enemy decisions and status-effect updates once in the agreed order. Menu navigation, pause, and redraws skip this loop. Item actions call this same loop instead of running a second one.</p></li>
 <li><h3>Handle failed actions <span class="contract">(SDD Contract 2)</span></h3><p>Return a spent-turn result for blocked movement, failed pickup, full-inventory rejection, and failed item use. Leave rejected changes unapplied, then run the normal turn updates once.</p></li>
-<li><h3>Use effects and equipment <span class="contract">(SDD Contracts 2, 7)</span></h3><p>Call the existing status-effect tick once per turn. Calculate effective attack and defense from base stats plus equipped item effects. Reading stats or drawing a frame must not change base values or add bonuses again.</p></li>
-<li><h3>Stop on death <span class="contract">(SDD Contracts 2, 5, 10)</span></h3><p>After each damage or effect update, check the player’s health. At zero health, stop remaining enemy actions and end the session through progression-gameover. Skip enemy IDs that Level no longer contains.</p></li>
+<li><h3>Use effects and equipment <span class="contract">(SDD Contracts 2, 7)</span></h3><p>Tick player effects, then surviving enemies’ effects once per ordinary turn. New weapon-applied effects tick that turn. Calculate effective attack and defense from base stats plus equipped item effects. Reading stats or drawing a frame must not change base values or add bonuses again.</p></li>
+<li><h3>Stop on death <span class="contract">(SDD Contracts 2, 5, 10)</span></h3><p>After each damage or effect update, check the player’s health. At zero health, stop remaining processing and end the session through progression-gameover, preserving the message history for game-over viewing. Skip enemy IDs that Level no longer contains. Resolve direct and effect enemy deaths through one removal/drop path with a single 5% equipment-drop roll and depth-appropriate catalog selection.</p></li>
 </ul><div class="gate"><h3>Done when</h3><ul>
 <li>Attacks, defense, equipment, and lethal damage work together.</li>
 <li>Every spent turn advances enemies and effects exactly once.</li>
@@ -123,9 +123,9 @@
 <p class="lede">Move between floors and finish a session.</p>
 <p><strong>When:</strong> Start stairs after player-movement. Finish populated floors after level-entities, death handling after combat, and state-preservation checks after inventory.</p>
 <ul class="tasks">
-<li><h3>Use stairs <span class="contract">(SDD Contracts 2, 4, 21)</span></h3><p>Map &gt; to a descend action. Game checks that the player is alive and their position equals Level’s stairs position before descending. Moving onto stairs does not descend. The action spends one turn; define which floor’s enemy/effect updates run during it.</p></li>
+<li><h3>Use stairs <span class="contract">(SDD Contracts 2, 4, 21)</span></h3><p>Map &gt; to a descend action. Game checks that the player is alive and their position equals Level’s stairs position before descending. Moving onto stairs does not descend. Valid descent ticks player effects on the old floor; death prevents replacement. Otherwise enter the new floor without enemy actions or enemy effect ticks. Failed descent spends an ordinary turn.</p></li>
 <li><h3>Generate the next floor <span class="contract">(SDD Contracts 4, 7, 19)</span></h3><p>Generate a Level at the next depth using Game’s RNG, replace the old Level, and set the existing Player’s position to the new start. Keep the player’s stats, effects, inventory, and equipment. Check depth overflow before incrementing.</p></li>
-<li><h3>Show game over <span class="contract">(SDD Contracts 5, 20)</span></h3><p>When combat or a status effect reduces player health to zero, store final depth and the chosen result details in session-summary state. Set Screen to GameOver and reject gameplay actions. Pass the stored summary to the game-over view.</p></li>
+<li><h3>Show game over <span class="contract">(SDD Contracts 5, 20)</span></h3><p>When combat or a status effect reduces player health to zero, store final depth and cause of death in session-summary state. Set Screen to GameOver and reject gameplay actions. Pass the stored summary and full MessageLog history to the game-over view, showing recent messages initially and allowing history scrolling without spending turns.</p></li>
 <li><h3>Return and restart <span class="contract">(SDD Contracts 1, 3, 5)</span></h3><p>On return to menu, clear active session state. On New Game, create a new player, floor, log, and selections, and clear the old summary. Route quit through the launcher’s existing terminal cleanup.</p></li>
 <li><h3>Keep stair use separate from movement <span class="contract">(SDD Contracts 2, 4, 5)</span></h3><p>Only the descend action can replace the floor. Reject it for a dead player. Remove the old floor’s pending enemy actions when replacing Level. Death on a stairs tile follows normal death handling. Add a win condition only if required.</p></li>
 </ul><div class="gate"><h3>Done when</h3><ul>

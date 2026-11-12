@@ -1,29 +1,20 @@
-//! Enemy decision-making.
+//! AI decision contract. Game validates and applies each intent once.
 //!
-//! AiState = which mode an enemy is in (shared by all types).
-//! EnemyType -> AiProfile = when it changes mode and how it acts in each mode.
-//! `decide()` is read-only and returns an Intent; Game::advance_turn applies it
-//! via Level (contract 9) and Player (contract 7).
+//! Behavior uses the single `enemy::AiState` enum. Decision selection belongs to
+//! enemy-ai; intents do not apply damage or advance turns themselves.
 
-/// Behavioral mode of an enemy.
-pub enum AiState {
-    Sleeping,
-    Idle,
-    Chasing,
-    Fleeing,
-}
+use crate::game::position::Position;
 
-/// Per-EnemyType tuning (sight range, wake chance, flee threshold, movement style).
-pub struct AiProfile {
-    // TODO: sight_range: i32, wake_chance: f32, flee_below_hp: f32, movement: Movement
-}
-
-/// What an enemy wants to do this turn.
+/// What one enemy requests; the caller supplies its floor-local EnemyId.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intent {
+    /// Take no action this turn.
     Wait,
-    Move, // TODO: carry target Position
+    /// Request a tile, subject to Game and Level collision validation.
+    Move {
+        /// Requested destination in map coordinates.
+        target: Position,
+    },
+    /// Request a cardinally adjacent attack against the active player.
     Attack,
 }
-
-// TODO: pub fn decide(enemy: &Enemy, player_pos: Position, level: &Level, rng: &mut _)
-//           -> (AiState, Intent)

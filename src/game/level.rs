@@ -340,7 +340,7 @@ mod tests {
         assert!(level.ground_items().is_empty());
         let first = insert(&mut level, 1);
         let second = insert(&mut level, 2);
-        assert_eq!(level.remove_enemy(first).unwrap().stats().hp(), 25);
+        assert_eq!(level.remove_enemy(first).unwrap().stats().hp(), 100);
         assert!(level.enemy(first).is_none());
         assert!(level.remove_enemy(first).is_none());
         assert!(!level.move_enemy(first, Position::new(3, 1)));

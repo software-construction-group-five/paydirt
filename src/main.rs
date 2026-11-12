@@ -121,7 +121,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(screen.contains('@'));
-        assert!(screen.contains("Health: 100 / 100"));
+        assert!(screen.contains("Health: 200 / 200"));
 
         let keybinds = Keybinds::parse(include_str!("../config/keybinds.toml")).unwrap();
         for code in [
@@ -152,20 +152,23 @@ mod tests {
                         .chain(level_view.items)
                         .all(|entity| { level.get_map().is_visible(entity.position) })
                 );
-                assert_eq!(view.status.health, Some((100, 100)));
+                assert_eq!(view.status.health, Some((200, 200)));
                 terminal.draw(|frame| renderer.render(frame, game.screen(), view))
             })
             .unwrap();
-            assert_eq!(
-                terminal
-                    .backend()
-                    .buffer()
-                    .content
-                    .iter()
-                    .filter(|cell| cell.symbol() == "@")
-                    .count(),
-                1
-            );
+            // The centered pause overlay can cover the player on some floors.
+            if matches!(game.screen(), Screen::Playing) {
+                assert_eq!(
+                    terminal
+                        .backend()
+                        .buffer()
+                        .content
+                        .iter()
+                        .filter(|cell| cell.symbol() == "@")
+                        .count(),
+                    1
+                );
+            }
         }
     }
 }

@@ -27,7 +27,7 @@ use screen::Screen;
 use stats::Stats;
 
 // TODO(joseph): confirm starting stats with the team
-const STARTING_MAX_HP: i32 = 100;
+const STARTING_MAX_HP: i32 = 200;
 const STARTING_ATTACK: i32 = 15;
 const STARTING_DEFENSE: i32 = 5;
 const MESSAGE_LOG_CAPACITY: usize = 50;
@@ -291,7 +291,7 @@ mod tests {
                 assert_eq!(game.player().unwrap().get_position(), start);
                 let level = game.level().unwrap();
                 assert_eq!(level.enemy_at(expected), Some(id));
-                assert_eq!(level.enemy(id).unwrap().stats().hp(), 5);
+                assert_eq!(level.enemy(id).unwrap().stats().hp(), 30);
                 assert!(
                     level
                         .get_map()

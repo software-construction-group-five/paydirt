@@ -2,6 +2,12 @@
 
 A terminal roguelike about Paydirt Pete's daring escape from the mine
 
+The phase 1 [combat and turn contracts](docs/combat-turns.md) define damage,
+turn order, equipment drops, descent, and game-over message history. Scaled stats,
+equipment modifiers, reusable weapon effects, enemy effect operations, and AI
+intent types are implemented. Attack resolution and turn scheduling remain
+unfinished; drops and game-over history controls follow in later phases.
+
 ## Theme configuration
 
 Characters and foreground colors are defined in `config/theme.toml`. The TUI
