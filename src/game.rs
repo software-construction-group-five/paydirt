@@ -17,6 +17,7 @@ pub mod screen;
 pub mod stats;
 
 use action::{Action, TurnResult};
+use enemy::ai::{self, AiProfile, Intent};
 use equipment::Equipment;
 use inventory::Inventory;
 use level::{Level, generator::LevelGenerator};
@@ -93,8 +94,9 @@ impl Game {
         self.should_quit
     }
 
-    /// Processes menu, pause, and movement actions, and reports whether a
-    /// gameplay turn was spent (Game Contract 2).
+    /// Processes a player action and advances enemy AI exactly once for each
+    /// spent gameplay turn (Game Contract 2). Menu and pause actions do not
+    /// advance enemies.
     pub fn process_action(&mut self, action: &Action) -> TurnResult {
         if self.should_quit {
             return TurnResult::NotSpent;
@@ -103,35 +105,98 @@ impl Game {
             self.should_quit = true;
             return TurnResult::NotSpent;
         }
-        match self.screen {
-            Screen::MainMenu => match action {
-                Action::MoveUp | Action::MoveDown => self.menu_selection = 1 - self.menu_selection,
-                Action::Confirm if self.menu_selection == 0 => self.initialize_game(),
-                Action::Confirm => self.should_quit = true,
-                _ => {}
-            },
+
+        let result = match self.screen {
+            Screen::MainMenu => {
+                match action {
+                    Action::MoveUp | Action::MoveDown => {
+                        self.menu_selection = 1 - self.menu_selection
+                    }
+                    Action::Confirm if self.menu_selection == 0 => self.initialize_game(),
+                    Action::Confirm => self.should_quit = true,
+                    _ => {}
+                }
+                TurnResult::NotSpent
+            }
             Screen::Playing => match action {
-                Action::Pause => self.screen = Screen::Paused,
-                Action::MoveUp => return self.move_player(0, -1),
-                Action::MoveDown => return self.move_player(0, 1),
-                Action::MoveLeft => return self.move_player(-1, 0),
-                Action::MoveRight => return self.move_player(1, 0),
-                Action::Wait => return TurnResult::Spent,
-                _ => {}
+                Action::Pause => {
+                    self.screen = Screen::Paused;
+                    TurnResult::NotSpent
+                }
+                Action::MoveUp => self.move_player(0, -1),
+                Action::MoveDown => self.move_player(0, 1),
+                Action::MoveLeft => self.move_player(-1, 0),
+                Action::MoveRight => self.move_player(1, 0),
+                Action::Wait => TurnResult::Spent,
+                _ => TurnResult::NotSpent,
             },
-            Screen::Inventory => {}
-            Screen::Paused => match action {
-                Action::Pause | Action::Confirm => self.screen = Screen::Playing,
-                Action::Back => self.return_to_menu(),
-                _ => {}
-            },
+            Screen::Inventory => TurnResult::NotSpent,
+            Screen::Paused => {
+                match action {
+                    Action::Pause | Action::Confirm => self.screen = Screen::Playing,
+                    Action::Back => self.return_to_menu(),
+                    _ => {}
+                }
+                TurnResult::NotSpent
+            }
             Screen::GameOver => {
                 if matches!(action, Action::Confirm | Action::Back) {
                     self.return_to_menu();
                 }
+                TurnResult::NotSpent
+            }
+        };
+
+        if result == TurnResult::Spent {
+            self.advance_enemy_turns();
+        }
+        result
+    }
+
+    /// Applies one AI decision per living enemy after a spent player turn.
+    /// Level validates terrain and occupancy; combat-turns will execute Attack.
+    /// Snapshotting IDs prevents enemy movements from changing turn order.
+    fn advance_enemy_turns(&mut self) {
+        let Some(player_pos) = self.player.as_ref().map(Player::get_position) else {
+            return;
+        };
+        let Some(level) = self.level.as_mut() else {
+            return;
+        };
+
+        let enemy_ids: Vec<_> = level.enemies().map(|(id, _)| id).collect();
+        for id in enemy_ids {
+            // Decision-making borrows the level immutably. Mutations happen
+            // afterward, so Level remains the authority on valid moves.
+            let Some((state, intent)) = level.enemy(id).map(|enemy| {
+                let profile = AiProfile::for_enemy(enemy);
+                ai::decide(enemy, player_pos, profile, |target| {
+                    target != player_pos
+                        && level.is_walkable(target)
+                        && level.enemy_at(target).is_none()
+                })
+            }) else {
+                continue;
+            };
+
+            level.set_enemy_ai_state(id, state);
+            match intent {
+                Intent::Move(target) => {
+                    // Revalidate because earlier enemies already took turns.
+                    if target != player_pos
+                        && level.is_walkable(target)
+                        && level.enemy_at(target).is_none()
+                    {
+                        level.move_enemy(id, target);
+                    }
+                }
+                Intent::Attack => {
+                    // TODO(combat-turns): resolve damage through Game's combat rules.
+                    // Do not damage Player until combat integration is approved.
+                }
+                Intent::Wait => {}
             }
         }
-        TurnResult::NotSpent
     }
 
     /// Starts a fresh session: new floor, new player at its start, empty log (contract 1).
@@ -422,6 +487,123 @@ mod tests {
             return;
         }
         panic!("no closed door found in 50 generated levels");
+    }
+
+    #[test]
+    fn waiting_advances_enemy_ai_but_pausing_does_not() {
+        let mut game = Game::new();
+        game.rng = StdRng::seed_from_u64(42);
+        game.process_action(&Action::Confirm);
+
+        // Remove generated enemies to test one deterministic AI actor.
+        let ids: Vec<_> = game.level().unwrap().enemies().map(|(id, _)| id).collect();
+        for id in ids {
+            game.level.as_mut().unwrap().remove_enemy(id);
+        }
+
+        // Find three walkable tiles in one row; the enemy is two steps away.
+        let (player_pos, expected_step, enemy_pos) = {
+            let level = game.level().unwrap();
+            level
+                .get_map()
+                .positions()
+                .find_map(|player_pos| {
+                    let step = player_pos.offset(1, 0)?;
+                    let enemy_pos = player_pos.offset(2, 0)?;
+                    (level.is_walkable(player_pos)
+                        && level.is_walkable(step)
+                        && level.is_walkable(enemy_pos))
+                    .then_some((player_pos, step, enemy_pos))
+                })
+                .expect("generated level should contain three consecutive floor tiles")
+        };
+        game.player.as_mut().unwrap().set_position(player_pos);
+        game.level.as_mut().unwrap().update_visibility(player_pos);
+        let id = game
+            .level
+            .as_mut()
+            .unwrap()
+            .insert_enemy(enemy::Enemy::new(enemy::EnemyType::Goblin, enemy_pos))
+            .ok()
+            .unwrap();
+
+        assert_eq!(game.process_action(&Action::Pause), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::Wait), TurnResult::NotSpent);
+        assert_eq!(
+            *game.level().unwrap().enemy(id).unwrap().position(),
+            enemy_pos
+        );
+        assert_eq!(game.process_action(&Action::Pause), TurnResult::NotSpent);
+
+        assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
+        let moved = game.level().unwrap().enemy(id).unwrap();
+        assert_eq!(*moved.position(), expected_step);
+        assert!(matches!(moved.ai(), enemy::AiState::Attacking));
+        assert_ne!(*moved.position(), player_pos);
+
+        // Adjacent enemies request Attack but do not deal damage until the
+        // separate combat-turns implementation is integrated.
+        let hp = game.player().unwrap().get_stats().hp();
+        assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
+        assert_eq!(
+            *game.level().unwrap().enemy(id).unwrap().position(),
+            expected_step
+        );
+        assert_eq!(game.player().unwrap().get_stats().hp(), hp);
+    }
+
+    #[test]
+    fn game_ai_avoids_an_occupied_preferred_step() {
+        let mut game = Game::new();
+        game.rng = StdRng::seed_from_u64(42);
+        game.process_action(&Action::Confirm);
+
+        let ids: Vec<_> = game.level().unwrap().enemies().map(|(id, _)| id).collect();
+        for id in ids {
+            game.level.as_mut().unwrap().remove_enemy(id);
+        }
+
+        // The nearest horizontal step is occupied, but moving down is legal.
+        let (from, blocked, alternative, player_pos) = {
+            let level = game.level().unwrap();
+            level
+                .get_map()
+                .positions()
+                .find_map(|from| {
+                    let blocked = from.offset(1, 0)?;
+                    let alternative = from.offset(0, 1)?;
+                    let player_pos = from.offset(2, 1)?;
+                    (level.is_walkable(from)
+                        && level.is_walkable(blocked)
+                        && level.is_walkable(alternative)
+                        && level.is_walkable(player_pos))
+                    .then_some((from, blocked, alternative, player_pos))
+                })
+                .expect("generated level should contain the necessary walkable tiles")
+        };
+
+        game.player.as_mut().unwrap().set_position(player_pos);
+        game.level.as_mut().unwrap().update_visibility(player_pos);
+        let active_id = game
+            .level
+            .as_mut()
+            .unwrap()
+            .insert_enemy(enemy::Enemy::new(enemy::EnemyType::Goblin, from))
+            .ok()
+            .unwrap();
+        let blocker_id = game
+            .level
+            .as_mut()
+            .unwrap()
+            .insert_enemy(enemy::Enemy::new(enemy::EnemyType::Slime, blocked))
+            .ok()
+            .unwrap();
+
+        assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
+        let level = game.level().unwrap();
+        assert_eq!(*level.enemy(active_id).unwrap().position(), alternative);
+        assert_eq!(*level.enemy(blocker_id).unwrap().position(), blocked);
+        assert!(level.enemy_at(player_pos).is_none());
     }
 
     #[test]
