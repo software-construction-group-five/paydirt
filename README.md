@@ -2,15 +2,10 @@
 
 A terminal roguelike about Paydirt Pete's daring escape from the mine
 
-The phase 1 [combat and turn contracts](docs/combat-turns.md) define damage,
-turn order, equipment drops, descent, and game-over message history. Scaled stats,
-equipment modifiers, reusable weapon effects, enemy effect operations, and AI
-intent types are implemented. Phase 2 adds pure damage calculation and controlled
-enemy damage/effect updates through Level, reporting actual HP loss and death.
-Phase 3 connects player bump attacks, surviving-target weapon effects, defeat
-messages, immediate enemy removal, and rare equipment drops. PR12 adds enemy
-decisions and one enemy AI phase per spent action. Enemy damage, scheduled effect
-ticks, and game-over history controls remain unfinished.
+Combat uses dice-based player and enemy attacks, weapon status effects, immediate
+enemy removal, rare equipment drops, and a shared turn loop. Death stops the turn
+and shows final depth, cause, and recent messages. Inventory controls, floor
+progression, and full game-over history scrolling remain unfinished.
 
 ## Theme configuration
 
@@ -159,9 +154,9 @@ pathfinding or door opening. Game revalidates terrain, occupancy, and the player
 tile before moving. Attacks require cardinal adjacency; diagonal neighbors
 approach instead of requesting PR12's original diagonal attack.
 
-Enemy attack intents currently wait without applying damage. Automatic status
-effect ticks, player death handling, and full combat turn integration remain work
-for the next combat phases.
+Enemy attack intents roll the species' damage dice once, subtract effective player
+defense (minimum one), and report actual HP lost. Invalid, dead, or non-cardinal
+targets do not consume a roll. Lethal damage stops the remaining enemy actions.
 
 ## TUI integration
 
@@ -213,11 +208,38 @@ tier (level no greater than saturating depth + 1). The current catalog only has
 level-one equipment. Entering a defeated enemy's tile takes another move.
 Movement attempts, door opening, and waiting report a spent turn, including blocked
 attempts by a living player. Dead-player gameplay actions are ignored without
-spending turns; pause/menu/quit remain available. Enemies do not retaliate yet,
-and status effects do not tick automatically;
-the full combat turn loop remains unfinished. PR12 does advance enemy movement
-and behavior once per spent action. Entity display and visibility queries do not
-spend turns.
+spending turns. Normal combat deaths immediately enter GameOver. Entity display
+and visibility queries do not spend turns.
+
+## Combat turn order
+
+`Game::process_action()` invokes one shared `advance_turn()` for each spent action:
+
+1. Resolve the player action and remove defeated enemies immediately.
+2. Process surviving enemies in stable ID order, applying one movement or attack
+   decision each. Revalidate cardinal attack range and apply dice damage once.
+3. Tick player effects once. If lethal, skip every remaining enemy effect tick.
+4. Tick surviving enemy effects once in ID order. Remove effect deaths and use
+   the same once-only equipment-drop path as direct kills.
+
+New weapon effects tick in the turn they are applied. An enemy killed by a direct
+hit never retaliates; one killed by a later effect can act before that tick.
+Effects bypass defense, stack independently up to three, and expire after their
+last tick. Logs show actual aggregate effect HP loss and individual expirations.
+The status panel shows active effect names and remaining turns.
+
+Blocked moves, waits, bump attacks, and opening doors all run this boundary once.
+Menus, pause, unsupported keys, and redraws do not advance enemies or effects.
+Future pickup/drop/equip/use handlers must return their spent-turn result to this
+same boundary, including failed attempts, rather than starting another loop.
+
+After any lethal damage update, Game stores final depth and cause, appends the
+death message, enters GameOver, and rejects further gameplay actions. The recent
+message panel remains visible on GameOver; full history is retained in MessageLog
+until returning to menu or restarting. Summary, history, effects, and equipment
+reset for a new session. Full-history scrolling and floor descent remain future
+work; descent must eventually use the previously agreed transition exception
+(player effects before replacement, no enemy phase on successful descent).
 
 Run `cargo fmt --check`, `cargo test --offline`, and
 `cargo clippy --offline --all-targets -- -D warnings` before review. In a terminal,

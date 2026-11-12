@@ -27,13 +27,22 @@ use message_log::MessageLog;
 use player::Player;
 use rand::{SeedableRng, rngs::StdRng};
 use screen::Screen;
-use stats::Stats;
+use stats::{Stats, StatusEffect};
 
 // Initial combat tuning; keep equipment bonuses separate from these base stats.
 const STARTING_MAX_HP: i32 = 40;
 const STARTING_ATTACK: i32 = 0;
 const STARTING_DEFENSE: i32 = 1;
 const MESSAGE_LOG_CAPACITY: usize = 50;
+
+/// Stored results of a completed session; retained with its message history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameSummary {
+    /// Dungeon depth at the moment of death.
+    pub final_depth: u32,
+    /// Human-readable cause of death.
+    pub outcome: String,
+}
 
 /// Owns screen navigation, the active dungeon floor, the player, and the message log.
 pub struct Game {
@@ -44,6 +53,7 @@ pub struct Game {
     log: MessageLog,
     rng: StdRng,
     should_quit: bool,
+    summary: Option<GameSummary>,
 }
 
 impl Default for Game {
@@ -63,6 +73,7 @@ impl Game {
             log: MessageLog::new(MESSAGE_LOG_CAPACITY),
             rng: StdRng::from_rng(&mut rand::rng()),
             should_quit: false,
+            summary: None,
         }
     }
 
@@ -91,14 +102,18 @@ impl Game {
         &self.log
     }
 
+    /// Borrows the final results, absent during an active or unstarted session.
+    pub fn summary(&self) -> Option<&GameSummary> {
+        self.summary.as_ref()
+    }
+
     /// Reports whether the application loop should exit and restore the terminal.
     pub fn should_quit(&self) -> bool {
         self.should_quit
     }
 
-    /// Processes a player action and advances enemy AI exactly once for each
-    /// spent gameplay turn (Game Contract 2). Menu and pause actions do not
-    /// advance enemies.
+    /// Processes an action and advances enemies and effects once if a turn was
+    /// spent. Menu navigation, pause, and redraws do not advance combat.
     pub fn process_action(&mut self, action: &Action) -> TurnResult {
         if self.should_quit {
             return TurnResult::NotSpent;
@@ -158,14 +173,24 @@ impl Game {
         };
 
         if result == TurnResult::Spent {
-            self.advance_enemy_turns();
+            self.advance_turn();
         }
         result
     }
 
-    /// Applies one AI decision per living enemy after a spent player turn.
-    /// Level validates terrain and occupancy; combat-turns will execute Attack.
-    /// Snapshotting IDs prevents enemy movements from changing turn order.
+    /// The only spent-turn boundary: enemies, player effects, then enemy effects.
+    fn advance_turn(&mut self) {
+        if self.finish_if_dead("You died.".to_owned()) {
+            return;
+        }
+        self.advance_enemy_turns();
+        if matches!(self.screen, Screen::GameOver) {
+            return;
+        }
+        self.advance_effects();
+    }
+
+    /// Applies one decision per living enemy in stable insertion-ID order.
     fn advance_enemy_turns(&mut self) {
         let Some(player_pos) = self
             .player
@@ -175,12 +200,15 @@ impl Game {
         else {
             return;
         };
-        let Some(level) = self.level.as_mut() else {
+        let Some(level) = self.level.as_ref() else {
             return;
         };
 
         let enemy_ids: Vec<_> = level.enemies().map(|(id, _)| id).collect();
         for id in enemy_ids {
+            let Some(level) = self.level.as_ref() else {
+                return;
+            };
             let Some(enemy) = level.enemy(id).filter(|enemy| !enemy.stats().is_dead()) else {
                 continue;
             };
@@ -194,6 +222,10 @@ impl Game {
                         && level.is_walkable(target)
                         && level.enemy_at(target).is_none()
                 });
+            let level = self
+                .level
+                .as_mut()
+                .expect("active floor remains during enemy phase");
             level.set_enemy_ai_state(id, state);
             match intent {
                 Intent::Move { target } => {
@@ -204,12 +236,123 @@ impl Game {
                     }
                 }
                 Intent::Attack => {
-                    // TODO(combat-turns): resolve damage through Game's combat rules.
-                    // Enemy damage and effect scheduling are the next combat phase.
+                    self.enemy_attack(id);
+                    if matches!(self.screen, Screen::GameOver) {
+                        return;
+                    }
                 }
                 Intent::Wait => {}
             }
         }
+    }
+
+    /// Revalidates an enemy attack and stops the session immediately on death.
+    fn enemy_attack(&mut self, id: EnemyId) {
+        let (Some(player), Some(level)) = (self.player.as_mut(), self.level.as_ref()) else {
+            return;
+        };
+        let Some(enemy) = level.enemy(id) else {
+            return;
+        };
+        if player.get_stats().is_dead()
+            || enemy.stats().is_dead()
+            || !player
+                .get_position()
+                .is_cardinal_neighbor(*enemy.position())
+        {
+            return;
+        }
+        let kind = *enemy.kind();
+        let damage = attack_damage(enemy.get_roll(&mut self.rng), player.effective_defense());
+        let old_hp = player.get_stats().hp();
+        player.update_health(-(damage.min(i32::MAX as u32) as i32), None);
+        let lost = old_hp - player.get_stats().hp();
+        self.log
+            .add_message(format!("{kind} hits you for {lost} damage."));
+        self.finish_if_dead(format!("You were defeated by {kind}."));
+    }
+
+    /// Ticks each survivor once. A player effect death skips all enemy effects.
+    fn advance_effects(&mut self) {
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        let effects = player.get_stats().status_effects().to_vec();
+        let lost = player.tick_status_effects();
+        self.log_effect_tick("You", &effects, lost);
+        let names = effects
+            .iter()
+            .map(StatusEffect::name)
+            .collect::<Vec<_>>()
+            .join(", ");
+        if self.finish_if_dead(format!("You died from status effects: {names}.")) {
+            return;
+        }
+
+        let Some(level) = self.level.as_ref() else {
+            return;
+        };
+        let enemy_ids: Vec<_> = level.enemies().map(|(id, _)| id).collect();
+        for id in enemy_ids {
+            let Some(level) = self.level.as_mut() else {
+                return;
+            };
+            let Some(enemy) = level.enemy(id).filter(|enemy| !enemy.stats().is_dead()) else {
+                continue;
+            };
+            let kind = enemy.kind().to_string();
+            let effects = enemy.stats().status_effects().to_vec();
+            let Some(outcome) = level.tick_enemy_effects(id) else {
+                continue;
+            };
+            self.log_effect_tick(&kind, &effects, outcome.hp_lost);
+            if outcome.is_dead {
+                self.defeat_enemy(id);
+            }
+        }
+    }
+
+    /// Logs aggregate effect damage and each independently expiring effect.
+    fn log_effect_tick(&mut self, actor: &str, effects: &[StatusEffect], lost: i32) {
+        if lost > 0 {
+            let names = effects
+                .iter()
+                .map(StatusEffect::name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let verb = if actor == "You" { "take" } else { "takes" };
+            self.log.add_message(format!(
+                "{actor} {verb} {lost} damage from status effects ({names})."
+            ));
+        }
+        for effect in effects
+            .iter()
+            .filter(|effect| effect.turns_remaining() == 1)
+        {
+            self.log
+                .add_message(format!("{actor}: {} expires.", effect.name()));
+        }
+    }
+
+    /// Records results once and preserves the log until the session is cleared.
+    fn finish_if_dead(&mut self, outcome: String) -> bool {
+        if !self
+            .player
+            .as_ref()
+            .is_some_and(|player| player.get_stats().is_dead())
+        {
+            return false;
+        }
+        if self.summary.is_none() {
+            let final_depth = self.level.as_ref().map_or(0, Level::depth);
+            self.log.add_message(outcome.clone());
+            self.summary = Some(GameSummary {
+                final_depth,
+                outcome,
+            });
+        }
+        self.screen = Screen::GameOver;
+        true
     }
 
     /// Starts a fresh session: new floor, new player at its start, empty log (contract 1).
@@ -229,6 +372,7 @@ impl Game {
         ));
         self.level = Some(level);
         self.log.clear();
+        self.summary = None;
         self.screen = Screen::Playing;
     }
 
@@ -304,7 +448,7 @@ impl Game {
     }
 
     /// Removes a defeated enemy once and resolves its equipment drop.
-    /// Effect deaths will use this same path when turn scheduling is connected.
+    /// Both direct attacks and effect deaths use this path.
     fn defeat_enemy(&mut self, id: EnemyId) {
         let Some(level) = self.level.as_mut() else {
             return;
@@ -342,12 +486,334 @@ impl Game {
         self.level = None;
         self.player = None;
         self.log.clear();
+        self.summary = None;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn another_adjacent_enemy(game: &mut Game, kind: enemy::EnemyType) -> EnemyId {
+        let start = game.player().unwrap().get_position();
+        let level = game.level.as_mut().unwrap();
+        let position = level
+            .get_map()
+            .neighbors(start)
+            .find(|&position| level.is_walkable(position) && level.enemy_at(position).is_none())
+            .unwrap();
+        level
+            .insert_enemy(enemy::Enemy::new(kind, position))
+            .ok()
+            .unwrap()
+    }
+
+    #[test]
+    fn lethal_enemy_attack_stops_later_enemies_and_all_effect_ticks() {
+        use rand::RngExt;
+        let (mut game, first, _) = combat_game(0, 24, None);
+        let second = another_adjacent_enemy(&mut game, enemy::EnemyType::Slime);
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(-199, Some(StatusEffect::new("Poison".into(), 1, 2)));
+        game.level.as_mut().unwrap().damage_enemy(
+            second,
+            0,
+            Some(StatusEffect::new("Burning".into(), 1, 2)),
+        );
+        let mut expected_rng = StdRng::seed_from_u64(7);
+        game.level()
+            .unwrap()
+            .enemy(first)
+            .unwrap()
+            .get_roll(&mut expected_rng);
+        game.rng = StdRng::seed_from_u64(7);
+        assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
+        assert!(matches!(game.screen(), Screen::GameOver));
+        assert_eq!(game.player().unwrap().get_stats().hp(), 0);
+        assert_eq!(
+            game.player().unwrap().get_stats().status_effects()[0].turns_remaining(),
+            2
+        );
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .enemy(second)
+                .unwrap()
+                .stats()
+                .status_effects()[0]
+                .turns_remaining(),
+            2
+        );
+        assert_eq!(
+            game.message_log().history(),
+            [
+                "Goblin hits you for 1 damage.",
+                "You were defeated by Goblin."
+            ]
+        );
+        assert_eq!(
+            game.summary().unwrap().final_depth,
+            game.level().unwrap().depth()
+        );
+        assert_eq!(game.rng.random::<u64>(), expected_rng.random::<u64>());
+        let summary = game.summary().unwrap().clone();
+        assert_eq!(game.process_action(&Action::Wait), TurnResult::NotSpent);
+        assert_eq!(game.process_action(&Action::MoveUp), TurnResult::NotSpent);
+        assert_eq!(game.summary(), Some(&summary));
+        assert_eq!(game.message_log().history().len(), 2);
+        game.process_action(&Action::Confirm);
+        assert!(game.summary().is_none());
+        assert!(game.message_log().history().is_empty());
+        game.process_action(&Action::Confirm);
+        assert!(matches!(game.screen(), Screen::Playing));
+        assert_eq!(game.player().unwrap().get_stats().hp(), 40);
+        assert!(
+            game.player()
+                .unwrap()
+                .get_stats()
+                .status_effects()
+                .is_empty()
+        );
+        assert!(game.summary().is_none());
+    }
+
+    #[test]
+    fn player_effect_death_skips_enemy_effects_and_retains_the_lethal_messages() {
+        let (mut game, id, _) = combat_game(0, 24, None);
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(0, Some(StatusEffect::new("Poison".into(), i32::MAX, 2)));
+        game.level.as_mut().unwrap().damage_enemy(
+            id,
+            0,
+            Some(StatusEffect::new("Burning".into(), i32::MAX, 2)),
+        );
+        game.process_action(&Action::Wait);
+        assert!(matches!(game.screen(), Screen::GameOver));
+        assert_eq!(game.level().unwrap().enemy(id).unwrap().stats().hp(), 24);
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()[0]
+                .turns_remaining(),
+            2
+        );
+        let log = game.message_log().history();
+        assert!(log[0].contains("Goblin hits you"));
+        assert!(log[1].contains("damage from status effects (Poison)"));
+        assert_eq!(log[2], "You died from status effects: Poison.");
+        assert_eq!(game.summary().unwrap().outcome, log[2]);
+    }
+
+    #[test]
+    fn enemy_effect_death_follows_its_action_and_uses_the_shared_drop_path_once() {
+        use rand::RngExt;
+        let (mut game, id, _) = combat_game(0, 24, None);
+        game.level.as_mut().unwrap().damage_enemy(
+            id,
+            0,
+            Some(StatusEffect::new("Burning".into(), i32::MAX, 1)),
+        );
+        game.rng = StdRng::seed_from_u64(7);
+        let mut expected_rng = StdRng::seed_from_u64(7);
+        game.level()
+            .unwrap()
+            .enemy(id)
+            .unwrap()
+            .get_roll(&mut expected_rng);
+        let drop = equipment_drop(0, item::catalog(), &mut expected_rng);
+        assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
+        assert!(game.level().unwrap().enemy(id).is_none());
+        assert_eq!(
+            game.level().unwrap().ground_items().len(),
+            usize::from(drop.is_some())
+        );
+        let log = game.message_log().history();
+        assert!(log[0].contains("Goblin hits you"));
+        assert_eq!(
+            log[1],
+            "Goblin takes 24 damage from status effects (Burning)."
+        );
+        assert_eq!(log[2], "Goblin: Burning expires.");
+        assert_eq!(log[3], "You defeat Goblin.");
+        let history = log.to_vec();
+        game.process_action(&Action::Wait);
+        assert_eq!(game.message_log().history(), history);
+        assert_eq!(game.rng.random::<u64>(), expected_rng.random::<u64>());
+    }
+
+    #[test]
+    fn direct_kill_prevents_retaliation_and_removed_enemies_never_tick() {
+        let (mut game, id, action) = combat_game(150, 24, None);
+        game.level.as_mut().unwrap().damage_enemy(
+            id,
+            0,
+            Some(StatusEffect::new("Poison".into(), 1, 2)),
+        );
+        let hp = game.player().unwrap().get_stats().hp();
+        game.process_action(&action);
+        assert_eq!(game.player().unwrap().get_stats().hp(), hp);
+        assert!(game.level().unwrap().enemy(id).is_none());
+        assert!(
+            !game
+                .message_log()
+                .history()
+                .iter()
+                .any(|line| line.contains("hits you") || line.contains("status effects"))
+        );
+    }
+
+    #[test]
+    fn menus_and_pause_do_not_tick_effects_or_roll_attacks() {
+        use rand::RngExt;
+        let (mut game, id, _) = combat_game(0, 24, None);
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(0, Some(StatusEffect::new("Poison".into(), 1, 2)));
+        game.level.as_mut().unwrap().damage_enemy(
+            id,
+            0,
+            Some(StatusEffect::new("Burning".into(), 1, 2)),
+        );
+        game.rng = StdRng::seed_from_u64(7);
+        for action in [
+            Action::Confirm,
+            Action::Pause,
+            Action::Wait,
+            Action::MoveUp,
+            Action::Pause,
+        ] {
+            assert_eq!(game.process_action(&action), TurnResult::NotSpent);
+        }
+        assert_eq!(game.player().unwrap().get_stats().hp(), 200);
+        assert_eq!(
+            game.player().unwrap().get_stats().status_effects()[0].turns_remaining(),
+            2
+        );
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()[0]
+                .turns_remaining(),
+            2
+        );
+        assert_eq!(
+            game.rng.random::<u64>(),
+            StdRng::seed_from_u64(7).random::<u64>()
+        );
+        assert!(game.message_log().history().is_empty());
+    }
+
+    #[test]
+    fn multiple_enemies_attack_in_id_order_once_then_player_and_enemy_effects_tick() {
+        let (mut game, first, _) = combat_game(0, 24, None);
+        let second = another_adjacent_enemy(&mut game, enemy::EnemyType::Slime);
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(0, Some(StatusEffect::new("Poison".into(), 2, 1)));
+        game.level.as_mut().unwrap().damage_enemy(
+            first,
+            0,
+            Some(StatusEffect::new("Burning".into(), 1, 2)),
+        );
+        game.level.as_mut().unwrap().damage_enemy(
+            second,
+            0,
+            Some(StatusEffect::new("Cold".into(), 1, 2)),
+        );
+        game.rng = StdRng::seed_from_u64(7);
+        let mut expected_rng = StdRng::seed_from_u64(7);
+        let first_damage = attack_damage(
+            game.level()
+                .unwrap()
+                .enemy(first)
+                .unwrap()
+                .get_roll(&mut expected_rng),
+            5,
+        );
+        let second_damage = attack_damage(
+            game.level()
+                .unwrap()
+                .enemy(second)
+                .unwrap()
+                .get_roll(&mut expected_rng),
+            5,
+        );
+        game.process_action(&Action::Wait);
+        assert_eq!(
+            game.player().unwrap().get_stats().hp(),
+            200 - first_damage as i32 - second_damage as i32 - 2
+        );
+        assert_eq!(game.level().unwrap().enemy(first).unwrap().stats().hp(), 23);
+        assert_eq!(game.level().unwrap().enemy(second).unwrap().stats().hp(), 7);
+        assert_eq!(
+            game.message_log().history(),
+            [
+                format!("Goblin hits you for {first_damage} damage."),
+                format!("Slime hits you for {second_damage} damage."),
+                "You take 2 damage from status effects (Poison).".to_owned(),
+                "You: Poison expires.".to_owned(),
+                "Goblin takes 1 damage from status effects (Burning).".to_owned(),
+                "Slime takes 1 damage from status effects (Cold).".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn enemy_attack_uses_equipped_defense_and_rejects_invalid_targets_without_rolling() {
+        use rand::RngExt;
+        for armored in [false, true] {
+            let (mut game, id, _) = combat_game(0, 24, None);
+            let start = game.player().unwrap().get_position();
+            let mut equipment = Equipment::new();
+            if armored {
+                equipment.equip(item::get_item(1)).unwrap();
+            }
+            game.player = Some(Player::new(
+                start,
+                Stats::new(40, 0, 1),
+                Inventory::new(),
+                equipment,
+            ));
+            game.rng = StdRng::seed_from_u64(7);
+            let mut expected_rng = StdRng::seed_from_u64(7);
+            let roll = game
+                .level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .get_roll(&mut expected_rng);
+            let damage = attack_damage(roll, if armored { 2 } else { 1 });
+            game.process_action(&Action::Wait);
+            assert_eq!(game.player().unwrap().get_stats().hp(), 40 - damage as i32);
+            let enemy_position = *game.level().unwrap().enemy(id).unwrap().position();
+            game.player
+                .as_mut()
+                .unwrap()
+                .set_position(enemy_position.offset(1, 1).unwrap());
+            game.enemy_attack(id);
+            game.player
+                .as_mut()
+                .unwrap()
+                .set_position(enemy_position.offset(2, 0).unwrap());
+            game.enemy_attack(id);
+            game.level.as_mut().unwrap().remove_enemy(id);
+            game.enemy_attack(id);
+            assert_eq!(game.rng.random::<u64>(), expected_rng.random::<u64>());
+            assert_eq!(game.message_log().history().len(), 1);
+        }
+    }
 
     #[test]
     fn dead_player_cannot_move_wait_or_open_doors_but_can_leave_the_session() {
@@ -461,14 +927,14 @@ mod tests {
     }
 
     #[test]
-    fn bump_attack_spends_one_turn_without_moving_or_advancing_other_actors() {
+    fn bump_attack_runs_one_counterattack_without_moving_the_player() {
         let (mut game, id, action) = combat_game(0, 24, None);
         let start = game.player().unwrap().get_position();
         let level = game.level.as_mut().unwrap();
         let other_position = level
             .get_map()
             .positions()
-            .find(|&p| level.is_walkable(p) && p != start && level.enemy_at(p).is_none())
+            .find(|&p| level.is_walkable(p) && p.distance(start) > 6 && level.enemy_at(p).is_none())
             .unwrap();
         let other = level
             .insert_enemy(enemy::Enemy::new(enemy::EnemyType::Slime, other_position))
@@ -477,29 +943,48 @@ mod tests {
         game.rng = StdRng::seed_from_u64(7);
         let mut expected_rng = StdRng::seed_from_u64(7);
         let damage = attack_damage(game.player().unwrap().roll_attack(&mut expected_rng), 2);
+        let counter = attack_damage(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .get_roll(&mut expected_rng),
+            5,
+        );
         assert_eq!(game.process_action(&action), TurnResult::Spent);
         assert_eq!(game.player().unwrap().get_position(), start);
-        assert_eq!(game.player().unwrap().get_stats().hp(), 200);
+        assert_eq!(
+            game.player().unwrap().get_stats().hp(),
+            200 - counter as i32
+        );
         let level = game.level().unwrap();
         assert_eq!(level.enemy(id).unwrap().stats().hp(), 24 - damage as i32);
         assert_eq!(level.enemy(other).unwrap().stats().hp(), 8);
         assert_eq!(*level.enemy(other).unwrap().position(), other_position);
         assert_eq!(
             game.message_log().history(),
-            &[format!("You hit Goblin for {damage} damage.")]
+            &[
+                format!("You hit Goblin for {damage} damage."),
+                format!("Goblin hits you for {counter} damage.")
+            ]
         );
     }
 
     #[test]
-    fn weapon_dice_and_fresh_effects_apply_without_automatic_ticks() {
+    fn new_weapon_effects_tick_that_turn_and_duplicates_expire_independently() {
         let (mut game, id, action) =
-            combat_game(0, 24, Some(stats::EffectSpec::new("Poison".into(), 7, 3)));
+            combat_game(0, 24, Some(stats::EffectSpec::new("Poison".into(), 1, 3)));
         game.rng = StdRng::seed_from_u64(7);
         let mut expected_rng = StdRng::seed_from_u64(7);
         let mut expected_hp = 24;
-        for _ in 0..2 {
+        for active_effects in 1..=2 {
             let damage = attack_damage(game.player().unwrap().roll_attack(&mut expected_rng), 2);
-            expected_hp -= damage as i32;
+            expected_hp -= damage as i32 + active_effects;
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .get_roll(&mut expected_rng);
             assert_eq!(game.process_action(&action), TurnResult::Spent);
             assert_eq!(
                 game.level().unwrap().enemy(id).unwrap().stats().hp(),
@@ -514,15 +999,49 @@ mod tests {
             .stats()
             .status_effects();
         assert_eq!(effects.len(), 2);
-        assert!(effects.iter().all(|effect| effect.turns_remaining() == 3));
+        assert_eq!(
+            effects
+                .iter()
+                .map(StatusEffect::turns_remaining)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
         let log = game.message_log().history();
-        assert_eq!(log.len(), 4);
+        assert_eq!(log.len(), 8);
         assert!(log[0].contains("hit Goblin"));
         assert!(
             log.iter()
                 .all(|line| !line.contains('#') && !line.contains("EnemyId"))
         );
         assert!(log[1].contains("apply Poison"));
+        game.process_action(&Action::Wait);
+        let effects = game
+            .level()
+            .unwrap()
+            .enemy(id)
+            .unwrap()
+            .stats()
+            .status_effects();
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].turns_remaining(), 1);
+        game.process_action(&Action::Wait);
+        assert!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()
+                .is_empty()
+        );
+        assert_eq!(
+            game.message_log()
+                .history()
+                .iter()
+                .filter(|line| line.as_str() == "Goblin: Poison expires.")
+                .count(),
+            2
+        );
     }
 
     #[test]
@@ -767,6 +1286,11 @@ mod tests {
     fn walking_into_a_wall_stops_the_player() {
         let mut game = Game::new();
         game.process_action(&Action::Confirm);
+        let level = game.level.as_mut().unwrap();
+        let ids: Vec<_> = level.enemies().map(|(id, _)| id).collect();
+        for id in ids {
+            level.remove_enemy(id);
+        }
         // Rooms are enclosed, so walking left long enough always hits something
         // solid (or an enemy, which also blocks)
         for _ in 0..100 {
@@ -803,10 +1327,30 @@ mod tests {
     fn moves_and_waits_spend_a_turn_even_when_blocked() {
         let mut game = Game::new();
         game.process_action(&Action::Confirm);
+        let level = game.level.as_mut().unwrap();
+        let ids: Vec<_> = level.enemies().map(|(id, _)| id).collect();
+        for id in ids {
+            level.remove_enemy(id);
+        }
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(0, Some(StatusEffect::new("Timer".into(), 0, 101)));
         for _ in 0..100 {
             assert_eq!(game.process_action(&Action::MoveLeft), TurnResult::Spent);
         }
+        assert_eq!(
+            game.player().unwrap().get_stats().status_effects()[0].turns_remaining(),
+            1
+        );
         assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
+        assert!(
+            game.player()
+                .unwrap()
+                .get_stats()
+                .status_effects()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -930,15 +1474,14 @@ mod tests {
         assert!(matches!(moved.ai(), enemy::AiState::Attacking));
         assert_ne!(*moved.position(), player_pos);
 
-        // Adjacent enemies request Attack but do not deal damage until the
-        // separate combat-turns implementation is integrated.
+        // After approaching, the next spent turn resolves one adjacent attack.
         let hp = game.player().unwrap().get_stats().hp();
         assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
         assert_eq!(
             *game.level().unwrap().enemy(id).unwrap().position(),
             expected_step
         );
-        assert_eq!(game.player().unwrap().get_stats().hp(), hp);
+        assert!(game.player().unwrap().get_stats().hp() < hp);
     }
 
     #[test]
@@ -981,11 +1524,25 @@ mod tests {
         let enemy = game.level().unwrap().enemy(id).unwrap();
         assert_eq!(*enemy.position(), enemy_position);
         assert!(matches!(enemy.ai(), enemy::AiState::Idle));
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(0, Some(StatusEffect::new("Timer".into(), 0, 2)));
+        game.level.as_mut().unwrap().damage_enemy(
+            id,
+            0,
+            Some(StatusEffect::new("Timer".into(), 0, 2)),
+        );
         assert_eq!(game.process_action(&action), TurnResult::Spent);
         assert_eq!(game.player().unwrap().get_position(), player_position);
         let enemy = game.level().unwrap().enemy(id).unwrap();
         assert_eq!(*enemy.position(), door);
         assert!(matches!(enemy.ai(), enemy::AiState::Attacking));
+        assert_eq!(enemy.stats().status_effects()[0].turns_remaining(), 1);
+        assert_eq!(
+            game.player().unwrap().get_stats().status_effects()[0].turns_remaining(),
+            1
+        );
     }
 
     #[test]

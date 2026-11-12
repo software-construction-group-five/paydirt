@@ -90,10 +90,16 @@ fn with_view<R>(
         })
         .map(|item| item.name.as_str())
         .collect();
+    let effects: Vec<String> = player
+        .into_iter()
+        .flat_map(|player| player.get_stats().status_effects())
+        .map(|effect| format!("{} ({})", effect.name(), effect.turns_remaining()))
+        .collect();
+    let effect_names: Vec<&str> = effects.iter().map(String::as_str).collect();
     let status = StatusView {
         health: player.map(|player| (player.get_stats().hp(), player.get_stats().max_hp())),
         equipment: &equipment,
-        ..Default::default()
+        effects: &effect_names,
     };
     let view = RenderView {
         level,
@@ -101,6 +107,8 @@ fn with_view<R>(
         messages: &messages,
         selected: game.menu_selection(),
         help,
+        outcome: game.summary().map(|summary| summary.outcome.as_str()),
+        final_depth: game.summary().map(|summary| summary.final_depth),
         ..Default::default()
     };
     draw(&view)
