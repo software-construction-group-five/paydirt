@@ -93,6 +93,19 @@ impl Level {
         self.stairs_down
     }
 
+    /// Opens the closed door at `position`. Returns false, changing nothing,
+    /// if there is no closed door there (supports Game Contract 2).
+    /// Game refreshes visibility afterward, since an open door no longer blocks sight.
+    pub fn open_door(&mut self, position: Position) -> bool {
+        match self.map.get(position).map(|tile| tile.kind) {
+            Some(map::TileType::Door { open: false }) => {
+                self.map.set(position, map::TileType::Door { open: true });
+                true
+            }
+            _ => false,
+        }
+    }
+
     ////////////////////////////////////////////////////////////////////////////////
     // PLAYER VISIBILITY
     ////////////////////////////////////////////////////////////////////////////////
@@ -498,5 +511,21 @@ mod tests {
         assert!(!level.is_walkable(Position::new(2, 2)));
         assert!(!level.is_walkable(Position::new(3, 2)));
         assert!(!level.is_walkable(Position::new(5, 5)));
+    }
+
+    #[test]
+    fn open_door_opens_only_closed_doors() {
+        let mut map = Map::new(3, 1);
+        let floor = Position::new(0, 0);
+        let door = Position::new(1, 0);
+        map.set(floor, TileType::Floor);
+        map.set(door, TileType::Door { open: false });
+        let mut level = Level::new(map, 0, floor, floor, [floor]);
+        assert!(!level.is_walkable(door));
+        assert!(level.open_door(door));
+        assert!(level.is_walkable(door));
+        assert!(!level.open_door(door));
+        assert!(!level.open_door(floor));
+        assert!(!level.open_door(Position::new(5, 5)));
     }
 }
