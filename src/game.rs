@@ -27,7 +27,7 @@ use message_log::MessageLog;
 use player::{ItemError, Player};
 use rand::{SeedableRng, rngs::StdRng};
 use screen::Screen;
-use stats::{Stats, StatusEffect};
+use stats::{EffectKind, Stats, StatusEffect};
 
 // Initial combat tuning; keep equipment bonuses separate from these base stats.
 const STARTING_MAX_HP: i32 = 40;
@@ -639,7 +639,7 @@ impl Game {
         let stats = Stats::new(STARTING_MAX_HP, STARTING_ATTACK, STARTING_DEFENSE);
         let mut equipment = Equipment::new();
         equipment
-            .equip(item::get_item(0))
+            .equip(item::get_item(0).roll_spawn(0, &mut self.rng))
             .expect("starting pickaxe is a weapon");
         self.player = Some(Player::new(
             level.player_start(),
@@ -707,7 +707,16 @@ impl Game {
         }
         let defender = enemy.kind().to_string();
         let damage = attack_damage(player.roll_attack(&mut self.rng), enemy.stats().defense());
-        let effect = player.weapon_effect();
+        let lightning = player
+            .get_equipped_items()
+            .weapon
+            .as_ref()
+            .and_then(|item| item.combat().on_hit())
+            .filter(|effect| effect.kind() == Some(EffectKind::Lightning))
+            .map(|effect| (*enemy.position(), effect.power() as u32));
+        let effect = player
+            .weapon_effect()
+            .filter(|effect| effect.kind() != Some(EffectKind::Lightning));
         let effect_name = effect.as_ref().map(|effect| effect.name().to_owned());
         let Some(outcome) = level.damage_enemy(id, damage, effect) else {
             return;
@@ -724,6 +733,41 @@ impl Game {
         }
         if outcome.is_dead {
             self.defeat_enemy(id);
+        }
+        if let Some((center, power)) = lightning {
+            self.lightning_strike(id, center, power);
+        }
+    }
+
+    /// Applies immediate splash to other living enemies in sight of the impact.
+    fn lightning_strike(&mut self, primary: EnemyId, center: position::Position, power: u32) {
+        let targets: Vec<_> = self
+            .level
+            .as_ref()
+            .into_iter()
+            .flat_map(|level| {
+                level
+                    .enemies()
+                    .filter(|(id, enemy)| {
+                        *id != primary
+                            && !enemy.stats().is_dead()
+                            && center.distance(*enemy.position()) <= 2
+                            && level.get_map().has_line_of_sight(center, *enemy.position())
+                    })
+                    .map(|(id, _)| id)
+            })
+            .collect();
+        for id in targets {
+            let level = self.level.as_mut().unwrap();
+            let name = level.enemy(id).unwrap().kind().to_string();
+            let outcome = level.damage_enemy(id, power, None).unwrap();
+            self.log.add_message(format!(
+                "Lightning hits {name} for {} damage.",
+                outcome.hp_lost
+            ));
+            if outcome.is_dead {
+                self.defeat_enemy(id);
+            }
         }
     }
 
@@ -776,6 +820,100 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lightning_splashes_after_a_lethal_hit_without_attaching_a_dot() {
+        let (mut game, primary, action) = combat_game(
+            150,
+            1,
+            Some(stats::EffectSpec::weapon(EffectKind::Lightning, 2, 3)),
+        );
+        let secondary = another_adjacent_enemy(&mut game, enemy::EnemyType::Goblin);
+        let position = *game.level().unwrap().enemy(secondary).unwrap().position();
+        game.process_action(&action);
+        assert!(game.level().unwrap().enemy(primary).is_none());
+        let enemy = game.level().unwrap().enemy(secondary).unwrap();
+        assert_eq!(enemy.stats().hp(), 22);
+        assert!(enemy.stats().status_effects().is_empty());
+        assert!(
+            game.message_log()
+                .history()
+                .iter()
+                .any(|line| line.contains("Lightning hits Goblin for 2"))
+        );
+        game.level
+            .as_mut()
+            .unwrap()
+            .damage_enemy(secondary, 21, None);
+        game.lightning_strike(primary, position, 2);
+        assert!(game.level().unwrap().enemy(secondary).is_none());
+        let count = game
+            .message_log()
+            .history()
+            .iter()
+            .filter(|line| line.contains("defeat Goblin"))
+            .count();
+        game.lightning_strike(primary, position, 2);
+        assert_eq!(
+            game.message_log()
+                .history()
+                .iter()
+                .filter(|line| line.contains("defeat Goblin"))
+                .count(),
+            count
+        );
+    }
+
+    #[test]
+    fn weakness_reduces_enemy_damage_on_the_hit_turn_and_expires() {
+        use rand::RngExt;
+        let (mut game, id, action) = combat_game(
+            0,
+            24,
+            Some(stats::EffectSpec::weapon(EffectKind::Weakness, 2, 3)),
+        );
+        game.rng = StdRng::seed_from_u64(77);
+        let mut expected = StdRng::seed_from_u64(77);
+        let _ = game.player().unwrap().roll_attack(&mut expected);
+        let roll = game
+            .level()
+            .unwrap()
+            .enemy(id)
+            .unwrap()
+            .get_roll(&mut expected);
+        let initial_hp = game.player().unwrap().get_stats().hp();
+        let expected_loss = attack_damage(
+            roll.saturating_sub(2),
+            game.player().unwrap().effective_defense(),
+        ) as i32;
+        game.process_action(&action);
+        assert_eq!(
+            game.player().unwrap().get_stats().hp(),
+            initial_hp - expected_loss
+        );
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()[0]
+                .turns_remaining(),
+            2
+        );
+        assert_eq!(game.rng.random::<u64>(), expected.random::<u64>());
+        game.process_action(&Action::Wait);
+        game.process_action(&Action::Wait);
+        assert!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn descent_preserves_player_items_and_ticks_only_player_effects() {

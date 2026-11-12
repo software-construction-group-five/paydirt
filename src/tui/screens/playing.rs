@@ -138,15 +138,20 @@ pub fn draw_status(frame: &mut Frame, area: Rect, status: &StatusView<'_>, theme
     } else {
         status.effects.join(", ")
     };
-    let equipment = if status.equipment.is_empty() {
-        "--".to_owned()
-    } else {
-        status.equipment.join(", ")
-    };
+    let mut equipment = vec![Span::raw("Equipment: ")];
+    if status.equipment.is_empty() {
+        equipment.push(Span::raw("--"));
+    }
+    for (index, label) in status.equipment.iter().enumerate() {
+        if index > 0 {
+            equipment.push(Span::raw(", "));
+        }
+        equipment.extend(super::item_spans(label, theme.text));
+    }
     let lines = vec![
         Line::from(Span::styled(health, health_style)),
         Line::from(format!("Effects: {effects}")),
-        Line::from(format!("Equipment: {equipment}")),
+        Line::from(equipment),
     ];
     frame.render_widget(
         Paragraph::new(lines)

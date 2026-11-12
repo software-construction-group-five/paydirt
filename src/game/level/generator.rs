@@ -181,7 +181,9 @@ fn populate(level: &mut Level, rng: &mut impl Rng) {
         return;
     }
     for position in candidates.into_iter().take(item_count) {
-        let item = items[rng.random_range(0..items.len())].clone();
+        let item = items[rng.random_range(0..items.len())]
+            .clone()
+            .roll_spawn(level.depth(), rng);
         assert!(
             level.insert_ground_item(item, position).is_ok(),
             "validated item placement failed"

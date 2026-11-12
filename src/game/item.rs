@@ -4,14 +4,17 @@
 
 use crate::game::{
     combat::{DamageDice, Die},
-    stats::EffectSpec,
+    stats::{EffectKind, EffectSpec},
 };
+
+use rand::{Rng, RngExt};
 
 /// Immutable equipment bonuses and reusable weapon effect data.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CombatModifiers {
     damage: Option<DamageDice>,
     defense: i32,
+    bonus_damage: u32,
     on_hit: Option<EffectSpec>,
 }
 
@@ -21,6 +24,7 @@ impl CombatModifiers {
         Self {
             damage: Some(damage),
             defense: 0,
+            bonus_damage: 0,
             on_hit,
         }
     }
@@ -31,6 +35,7 @@ impl CombatModifiers {
         Self {
             damage: None,
             defense,
+            bonus_damage: 0,
             on_hit: None,
         }
     }
@@ -38,6 +43,26 @@ impl CombatModifiers {
     /// Returns weapon damage dice, if present.
     pub fn damage(&self) -> Option<DamageDice> {
         self.damage
+    }
+
+    /// Flat damage added to each attack roll.
+    pub fn bonus_damage(&self) -> u32 {
+        self.bonus_damage
+    }
+
+    /// Damage expression shown in inventory and status, including any rare effect.
+    pub fn damage_label(&self) -> Option<String> {
+        self.damage.map(|dice| {
+            let bonus = if self.bonus_damage == 0 {
+                String::new()
+            } else {
+                format!("+{}", self.bonus_damage)
+            };
+            let effect = self.on_hit.as_ref().map_or(String::new(), |effect| {
+                format!(" {}", effect.kind().map_or("Effect", EffectKind::name))
+            });
+            format!("{dice}{bonus}{effect}")
+        })
     }
 
     /// Returns the additive defense bonus.
@@ -109,6 +134,37 @@ impl Item {
         &self.combat
     }
 
+    /// Rolls a newly spawned weapon once; transfers must preserve this owned value.
+    /// Each four depths adds one guaranteed damage; a random bonus ranges from zero
+    /// through two plus that depth tier. Scaling is capped to keep arithmetic bounded.
+    pub fn roll_spawn(mut self, depth: u32, rng: &mut impl Rng) -> Self {
+        if self.kind != ItemType::Weapon {
+            return self;
+        }
+        let Some(dice) = self.combat.damage else {
+            return self;
+        };
+        let base_bonus = self.combat.bonus_damage;
+        let tier = (depth / 4).min(1000);
+        self.combat.bonus_damage = self
+            .combat
+            .bonus_damage
+            .saturating_add(tier + rng.random_range(0..=2 + tier));
+        if rng.random_range(0..100) == 0 {
+            let kind = match rng.random_range(0..3) {
+                0 => EffectKind::Bleed,
+                1 => EffectKind::Weakness,
+                _ => EffectKind::Lightning,
+            };
+            // Base damage excludes the randomized depth bonus and critical attack rolls.
+            let power = ((dice.minimum() + dice.maximum()) / 2 + base_bonus)
+                .div_ceil(4)
+                .max(1) as i32;
+            self.combat.on_hit = Some(EffectSpec::weapon(kind, power, 3));
+        }
+        self
+    }
+
     /// Sets positive consumable healing without affecting equipment modifiers.
     pub fn with_healing(mut self, amount: i32) -> Self {
         assert!(
@@ -134,9 +190,10 @@ struct CatalogEntry {
     damage: Option<DamageDice>,
     defense: i32,
     healing: Option<i32>,
+    bonus_damage: u32,
 }
 
-const CATALOG: [CatalogEntry; 3] = [
+const CATALOG: [CatalogEntry; 4] = [
     CatalogEntry {
         name: "Pickaxe",
         kind: ItemType::Weapon,
@@ -144,6 +201,7 @@ const CATALOG: [CatalogEntry; 3] = [
         damage: Some(DamageDice::new(2, Die::D4)),
         defense: 0,
         healing: None,
+        bonus_damage: 0,
     },
     CatalogEntry {
         name: "Leather Armor",
@@ -152,6 +210,7 @@ const CATALOG: [CatalogEntry; 3] = [
         damage: None,
         defense: 1,
         healing: None,
+        bonus_damage: 0,
     },
     CatalogEntry {
         name: "Health Potion",
@@ -160,6 +219,16 @@ const CATALOG: [CatalogEntry; 3] = [
         damage: None,
         defense: 0,
         healing: Some(12),
+        bonus_damage: 0,
+    },
+    CatalogEntry {
+        name: "Shovel",
+        kind: ItemType::Weapon,
+        level: 1,
+        damage: Some(DamageDice::new(2, Die::D4)),
+        defense: 0,
+        healing: None,
+        bonus_damage: 2,
     },
 ];
 
@@ -168,6 +237,7 @@ impl CatalogEntry {
         let combat = CombatModifiers {
             damage: self.damage,
             defense: self.defense,
+            bonus_damage: self.bonus_damage,
             on_hit: None,
         };
         let item = Item::new(index, self.name, self.kind, self.level).with_combat(combat);
@@ -227,7 +297,7 @@ mod tests {
     #[test]
     fn catalog_lookup_preserves_indices_and_returns_independent_items() {
         let items: Vec<_> = catalog().collect();
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 4);
         for (index, item) in items.iter().enumerate() {
             assert_eq!(item.index, index as u32);
             assert_eq!(*item, get_item(item.index));
@@ -235,6 +305,42 @@ mod tests {
         let mut carried = get_item(0);
         carried.name = "Modified pickaxe".to_owned();
         assert_eq!(catalog().next().unwrap().name, "Pickaxe");
+    }
+
+    #[test]
+    fn spawned_weapons_scale_replay_and_rarely_receive_each_effect() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut effects = [0; 3];
+        let mut bonuses = std::collections::HashSet::new();
+        for seed in 0..10000 {
+            let rolled = get_item(3).roll_spawn(12, &mut StdRng::seed_from_u64(seed));
+            assert_eq!(
+                rolled,
+                get_item(3).roll_spawn(12, &mut StdRng::seed_from_u64(seed))
+            );
+            assert!((5..=10).contains(&rolled.combat().bonus_damage()));
+            bonuses.insert(rolled.combat().bonus_damage());
+            if let Some(effect) = rolled.combat().on_hit() {
+                let index = match effect.kind().unwrap() {
+                    super::EffectKind::Bleed => 0,
+                    super::EffectKind::Weakness => 1,
+                    super::EffectKind::Lightning => 2,
+                };
+                effects[index] += 1;
+                assert_eq!(effect.power(), 2);
+            }
+            let deep = get_item(0).roll_spawn(u32::MAX, &mut StdRng::seed_from_u64(seed));
+            assert!((1000..=2002).contains(&deep.combat().bonus_damage()));
+            assert_eq!(
+                get_item(1),
+                get_item(1).roll_spawn(20, &mut StdRng::seed_from_u64(seed))
+            );
+        }
+        assert_eq!(bonuses.len(), 6);
+        assert!(effects.iter().all(|&count| count > 10));
+        assert!((50..150).contains(&effects.iter().sum::<usize>()));
+        assert_eq!(get_item(3).combat().damage_label().unwrap(), "2d4+2");
+        assert_eq!(get_item(0).combat().damage_label().unwrap(), "2d4");
     }
 
     // TC IT 09

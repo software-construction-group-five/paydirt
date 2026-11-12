@@ -137,7 +137,7 @@ replacement. On cramped floors, reserve up to half the available tiles for items
 then place as many enemies and items as fit. Placement terminates with no retries.
 
 Items are chosen uniformly from eligible entries exposed by `item::catalog()`.
-The catalog currently contains Pickaxe, Leather Armor, and Health Potion.
+The catalog currently contains Pickaxe, Leather Armor, Health Potion, and Shovel.
 Catalog level one is available at dungeon depth zero; availability uses saturating
 `depth + 1`. Identical depth and RNG seed reproduce terrain and population.
 
@@ -247,7 +247,7 @@ sight after movement and door interactions. The launcher supplies the active pla
 position, health, and messages to the renderer. Bumping a closed door opens it
 without moving; entering it takes another action. Bumping an enemy attacks it
 without moving, rolling weapon damage and subtracting defense with a minimum
-of one damage. New games equip a 2d4 Pickaxe; supported weapon dice are d4, d6,
+of one damage. New games equip a rolled Pickaxe with base damage 2d4; supported weapon dice are d4, d6,
 and d12. Unarmed damage is 1d4. Player HP is 40; Slime/Ghost/Goblin HP is 8/14/24,
 with damage rolls of 1d4/1d6/1d12 and defense of 0/1/2. Player base defense is 1,
 and Leather Armor adds 1. All starting flat attack modifiers are zero. Damage
@@ -256,11 +256,39 @@ Messages report actual damage, weapon effects, defeat, and drops using species
 names without enemy IDs. Equipped item names appear in the status panel. Each defeated
 enemy has a 5% chance to drop a weapon or armor from the highest unlocked catalog
 tier (level no greater than saturating depth + 1). The current catalog only has
-level-one equipment. Entering a defeated enemy's tile takes another move.
+level-one equipment. Weapon drops roll their bonuses and rare effects at the current depth. Entering a defeated enemy's tile takes another move.
 Movement attempts, door opening, and waiting report a spent turn, including blocked
 attempts by a living player. Dead-player gameplay actions are ignored without
 spending turns. Normal combat deaths immediately enter GameOver. Entity display
 and visibility queries do not spend turns.
+
+## Weapon rolls and rare effects
+
+Pickaxes deal base **2d4** damage; shovels deal **2d4+2**. Both unlock at
+catalog level one. Every newly created weapon (starting equipment, floor loot,
+and enemy drops) rolls once at its current dungeon depth. With
+`tier = min(depth / 4, 1000)`, its flat damage bonus is its base bonus plus
+`tier + random(0..=2 + tier)`. Attack dice still roll independently on every hit.
+Inventory transfers and floor transitions retain the original rolled values.
+
+Each weapon has a **1%** chance to gain one effect, chosen equally from:
+
+| Effect | Damage-text color | On-hit behavior |
+| --- | --- | --- |
+| Bleed | Red | Deals fixed damage for three turn boundaries, bypassing defense. |
+| Weakness | Purple | Reduces the enemy's outgoing attack roll for three turn boundaries, before defense and minimum-one damage. |
+| Lightning | Electric blue | Immediately damages other enemies within Chebyshev distance two of the target, requiring terrain line of sight and bypassing defense. |
+
+Effect power is one quarter of the weapon's average base damage (including the
+shovel's base +2), rounded up: currently **2** for both weapons. It excludes the
+random depth bonus and the attack's dice result. Lightning also triggers when the
+primary hit kills, does not chain, and uses the usual defeat/drop handling for
+splash kills. Bleed and weakness apply only to surviving targets, share the
+three-effect capacity, stack independently, and tick on the hit turn. Lightning
+is immediate and does not occupy a status slot.
+
+Inventory and equipped status labels show the full expression, for example
+`Shovel (2d4+4 Weakness)`, with only the parenthesized damage text colored.
 
 ## Combat turn order
 

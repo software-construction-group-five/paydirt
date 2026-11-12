@@ -86,7 +86,7 @@ pub(crate) fn equipment_drop(
     let tier = eligible.iter().map(|item| item.level).max()?;
     eligible.retain(|item| item.level == tier);
     let index = rng.random_range(0..eligible.len());
-    Some(eligible.swap_remove(index))
+    Some(eligible.swap_remove(index).roll_spawn(depth, rng))
 }
 
 /// Applies defense to a rolled attack total, with a minimum of one damage.

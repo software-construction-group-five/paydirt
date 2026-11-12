@@ -176,9 +176,17 @@ impl Player {
 
     /// Rolls damage once; Stats attack is an optional flat bonus (zero at start).
     pub fn roll_attack(&self, rng: &mut impl Rng) -> u32 {
-        self.damage_dice()
-            .roll(rng)
-            .saturating_add(self.stats.attack() as u32)
+        let bonus = self
+            .equipment
+            .weapon
+            .as_ref()
+            .map_or(0, |item| item.combat().bonus_damage());
+        self.stats.weaken_roll(
+            self.damage_dice()
+                .roll(rng)
+                .saturating_add(bonus)
+                .saturating_add(self.stats.attack() as u32),
+        )
     }
 
     /// Returns base defense plus the equipped armor bonus, without mutation.
@@ -226,6 +234,24 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::{Equipment, Inventory, Player, Position, Stats, StatusEffect};
+
+    #[test]
+    fn rolled_weapon_transfers_preserve_bonus_and_effect() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let original =
+            crate::game::item::get_item(3).roll_spawn(20, &mut StdRng::seed_from_u64(123));
+        let mut player = Player::new(
+            Position::new(1, 1),
+            Stats::new(40, 0, 1),
+            Inventory::new(),
+            Equipment::new(),
+        );
+        player.receive_item(original.clone()).unwrap();
+        player.equip_carried(0).unwrap();
+        assert_eq!(player.get_equipped_items().weapon.as_ref(), Some(&original));
+        player.unequip(super::EquipmentSlot::Weapon).unwrap();
+        assert_eq!(player.take_carried(0), Some(original));
+    }
 
     #[test]
     fn full_pack_weapon_swaps_preserve_original_dice_and_effects() {

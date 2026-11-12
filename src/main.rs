@@ -148,7 +148,7 @@ fn with_view<R>(
 
 /// Formats the same weapon label in the status panel and inventory rows.
 fn item_label(item: &Item) -> String {
-    item.combat().damage().map_or_else(
+    item.combat().damage_label().map_or_else(
         || item.name.clone(),
         |dice| format!("{} ({dice})", item.name),
     )
@@ -168,7 +168,17 @@ mod tests {
         let renderer = Renderer::default();
         with_view(&game, &renderer, "", |view| {
             assert_eq!(view.inventory.len(), 1);
-            assert_eq!(view.inventory[0].name, "Pickaxe (2d4)");
+            assert_eq!(
+                view.inventory[0].name,
+                item_label(
+                    game.player()
+                        .unwrap()
+                        .get_equipped_items()
+                        .weapon
+                        .as_ref()
+                        .unwrap()
+                )
+            );
             assert!(view.inventory[0].equipped);
             assert_eq!(view.selected, 0);
             assert_eq!(view.status.health, Some((40, 40)));
@@ -194,7 +204,8 @@ mod tests {
             .collect();
         assert!(screen.contains('@'));
         assert!(screen.contains("Health: 40 / 40"));
-        assert!(screen.contains("Pickaxe (2d4)"));
+        // Rare effect names may wrap inside the status panel.
+        assert!(screen.contains("Pickaxe (2d4"));
 
         let keybinds = Keybinds::parse(include_str!("../config/keybinds.toml")).unwrap();
         for code in [
