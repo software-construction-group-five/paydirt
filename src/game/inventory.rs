@@ -143,7 +143,7 @@ mod tests {
         assert!(inventory.add_item(2));
         let contents = inventory.return_inventory();
         assert!(contents.contains("Pickaxe"));
-        assert!(contents.contains("Leather Armor"));
+        assert!(contents.contains("Rusty Helmet"));
         assert!(contents.contains("Health Potion"));
     }
 
@@ -180,7 +180,7 @@ mod tests {
         inventory.add_item(1);
         let contents = inventory.return_inventory();
         assert!(contents.contains("Weapons: Pickaxe"));
-        assert!(contents.contains("Armor: Leather Armor"));
+        assert!(contents.contains("Armor: Rusty Helmet"));
         assert!(contents.contains("Consumables: Health Potion"));
     }
 }

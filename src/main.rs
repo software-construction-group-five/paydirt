@@ -62,6 +62,7 @@ fn with_view<R>(
     help: &str,
     draw: impl FnOnce(&RenderView<'_>) -> R,
 ) -> R {
+    let underlying_screen = game.help_origin().unwrap_or(*game.screen());
     let player = game.player();
     let player_position = player.map(|player| player.get_position());
     let enemies = game
@@ -72,7 +73,7 @@ fn with_view<R>(
         .level()
         .map(|level| renderer.item_entities(level))
         .unwrap_or_default();
-    let log = if game.help_origin().unwrap_or(*game.screen()) == Screen::GameOver {
+    let log = if underlying_screen == Screen::GameOver {
         game.message_log().history()
     } else {
         game.message_log().messages()
@@ -123,16 +124,19 @@ fn with_view<R>(
         })
         .collect();
     let status = StatusView {
+        turns_and_fuel: player
+            .map(|player| (player.get_stats().turns(), player.get_stats().lamp_fuel())),
         health: player.map(|player| (player.get_stats().hp(), player.get_stats().max_hp())),
         equipment: &equipment_names,
         effects: &effect_names,
     };
     let view = RenderView {
+        session_stats: game.session_stats(),
         level,
         status,
         messages: &messages,
         inventory: &inventory,
-        selected: if game.help_origin().unwrap_or(*game.screen()) == Screen::Inventory {
+        selected: if underlying_screen == Screen::Inventory {
             game.inventory_selection()
         } else {
             game.menu_selection()
@@ -148,7 +152,7 @@ fn with_view<R>(
 
 /// Formats the same weapon label in the status panel and inventory rows.
 fn item_label(item: &Item) -> String {
-    item.combat().damage().map_or_else(
+    item.combat().damage_label().map_or_else(
         || item.name.clone(),
         |dice| format!("{} ({dice})", item.name),
     )
@@ -168,10 +172,27 @@ mod tests {
         let renderer = Renderer::default();
         with_view(&game, &renderer, "", |view| {
             assert_eq!(view.inventory.len(), 1);
-            assert_eq!(view.inventory[0].name, "Pickaxe (2d4)");
+            assert_eq!(
+                view.inventory[0].name,
+                item_label(
+                    game.player()
+                        .unwrap()
+                        .get_equipped_items()
+                        .weapon
+                        .as_ref()
+                        .unwrap()
+                )
+            );
             assert!(view.inventory[0].equipped);
             assert_eq!(view.selected, 0);
             assert_eq!(view.status.health, Some((40, 40)));
+            assert_eq!(
+                view.status.turns_and_fuel,
+                Some((
+                    game.player().unwrap().get_stats().turns(),
+                    game.player().unwrap().get_stats().lamp_fuel()
+                ))
+            );
         });
     }
 
@@ -194,7 +215,9 @@ mod tests {
             .collect();
         assert!(screen.contains('@'));
         assert!(screen.contains("Health: 40 / 40"));
-        assert!(screen.contains("Pickaxe (2d4)"));
+        assert!(screen.contains("Turns: 0 / Lamp: 200/200"));
+        // Rare effect names may wrap inside the status panel.
+        assert!(screen.contains("Pickaxe (2d4"));
 
         let keybinds = Keybinds::parse(include_str!("../config/keybinds.toml")).unwrap();
         for code in [
@@ -226,6 +249,13 @@ mod tests {
                         .all(|entity| { level.get_map().is_visible(entity.position) })
                 );
                 assert_eq!(view.status.health, Some((40, 40)));
+                assert_eq!(
+                    view.status.turns_and_fuel,
+                    Some((
+                        game.player().unwrap().get_stats().turns(),
+                        game.player().unwrap().get_stats().lamp_fuel()
+                    ))
+                );
                 terminal.draw(|frame| renderer.render(frame, game.screen(), view))
             })
             .unwrap();

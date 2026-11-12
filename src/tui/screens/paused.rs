@@ -1,19 +1,39 @@
 //! Pause overlay over the current dungeon view.
 
 use super::{centered, panel};
-use crate::tui::theme::Theme;
+use crate::tui::{RenderView, theme::Theme};
 use ratatui::{
     Frame,
+    layout::Alignment,
     widgets::{Clear, Paragraph, Wrap},
 };
 
-/// Draws a centered pause notice without changing the underlying game state.
-pub fn draw(frame: &mut Frame, theme: &Theme) {
-    draw_overlay(frame, theme, " Paused ", "PAUSED\nTake a breather, Pete.");
+/// Draws a left-aligned session overview inside the titled pause panel.
+pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
+    let depth = view
+        .level
+        .as_ref()
+        .and_then(|level| level.depth)
+        .map_or_else(|| "--".to_owned(), |depth| depth.to_string());
+    let turns = view
+        .status
+        .turns_and_fuel
+        .map_or_else(|| "--".to_owned(), |(turns, _)| turns.to_string());
+    let text = format!(
+        "Depth: {depth}\nTurns: {turns}\nEnemies slain: {}\nItems acquired: {}",
+        view.session_stats.enemies_slain, view.session_stats.items_acquired,
+    );
+    draw_overlay(frame, theme, " Paused ", &text, Alignment::Left);
 }
 
-/// Shared centered overlay for pause and controls, differing only in text.
-pub fn draw_overlay(frame: &mut Frame, theme: &Theme, title: &str, text: &str) {
+/// Shared centered panel with explicit text alignment for pause and controls.
+pub fn draw_overlay(
+    frame: &mut Frame,
+    theme: &Theme,
+    title: &str,
+    text: &str,
+    alignment: Alignment,
+) {
     let width = frame.area().width.min(40);
     let columns = usize::from(width.saturating_sub(2)).max(1);
     let lines = text
@@ -25,7 +45,7 @@ pub fn draw_overlay(frame: &mut Frame, theme: &Theme, title: &str, text: &str) {
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(text)
-            .centered()
+            .alignment(alignment)
             .wrap(Wrap { trim: false })
             .style(theme.accent)
             .block(panel(title, theme)),

@@ -1,10 +1,33 @@
 //! Combat and health statistics shared by Player and Enemy.
 //Derived from Player Contract 7 - Update Player Health
 
+/// Behavior attached to a rare weapon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectKind {
+    /// Damage over time.
+    Bleed,
+    /// Reduces outgoing attack rolls.
+    Weakness,
+    /// Immediate splash damage around the struck enemy.
+    Lightning,
+}
+
+impl EffectKind {
+    /// Player-facing effect name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bleed => "Bleed",
+            Self::Weakness => "Weakness",
+            Self::Lightning => "Lightning",
+        }
+    }
+}
+
 /// Reusable weapon effect data; each hit creates an independent duration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectSpec {
     name: String,
+    kind: Option<EffectKind>,
     damage_per_turn: i32,
     duration: u32,
 }
@@ -16,21 +39,42 @@ impl EffectSpec {
         assert!(duration > 0, "Effect duration must be positive.");
         Self {
             name,
+            kind: None,
             damage_per_turn,
             duration,
         }
     }
 
+    /// Creates one of the supported weapon effects with fixed power.
+    pub fn weapon(kind: EffectKind, power: i32, duration: u32) -> Self {
+        let mut spec = Self::new(kind.name().into(), power, duration);
+        spec.kind = Some(kind);
+        spec
+    }
+
+    /// Typed behavior, absent for legacy damage-over-time effects.
+    pub fn kind(&self) -> Option<EffectKind> {
+        self.kind
+    }
+
+    /// Fixed effect power, independent of the attack roll.
+    pub fn power(&self) -> i32 {
+        self.damage_per_turn
+    }
+
     /// Starts a fresh effect without sharing a previous hit's remaining turns.
     pub fn instantiate(&self) -> StatusEffect {
-        StatusEffect::new(self.name.clone(), self.damage_per_turn, self.duration)
+        let mut effect = StatusEffect::new(self.name.clone(), self.damage_per_turn, self.duration);
+        effect.kind = self.kind;
+        effect
     }
 }
 
-/// A damaging effect. Durations are measured in gameplay turns.
+/// An active damage-over-time or weakness effect, measured in gameplay turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusEffect {
     name: String,
+    kind: Option<EffectKind>,
     damage_per_turn: i32,
     turns_remaining: u32,
 }
@@ -42,9 +86,15 @@ impl StatusEffect {
         assert!(turns > 0, "Effect duration must be positive.");
         Self {
             name,
+            kind: None,
             damage_per_turn,
             turns_remaining: turns,
         }
+    }
+
+    /// Typed behavior of this active effect.
+    pub fn kind(&self) -> Option<EffectKind> {
+        self.kind
     }
 
     /// Name used in combat and status messages.
@@ -62,12 +112,15 @@ impl StatusEffect {
 }
 
 /// Health, combat values, and at most three active status effects.
+/// Player sessions also advance the turn counter and lamp stored here.
 pub struct Stats {
     hp: i32,
     max_hp: i32,
     attack: i32,
     defense: i32,
     status_effects: Vec<StatusEffect>,
+    turns: u64,
+    lamp_fuel: u32,
 }
 
 impl Stats {
@@ -82,6 +135,41 @@ impl Stats {
             attack,
             defense,
             status_effects: Vec::new(),
+            turns: 0,
+            lamp_fuel: 200,
+        }
+    }
+
+    /// Number of spent player turns in this session, including lethal actions.
+    pub fn turns(&self) -> u64 {
+        self.turns
+    }
+
+    /// Remaining lamp fuel, measured in turns (maximum 200).
+    pub fn lamp_fuel(&self) -> u32 {
+        self.lamp_fuel
+    }
+
+    /// Counts one spent player action and burns one unit of lamp fuel.
+    pub fn spend_turn(&mut self) {
+        self.turns = self.turns.saturating_add(1);
+        self.lamp_fuel = self.lamp_fuel.saturating_sub(1);
+    }
+
+    /// Refills the lamp to 200 turns and returns fuel restored.
+    pub fn refuel_lamp(&mut self) -> u32 {
+        let restored = 200 - self.lamp_fuel;
+        self.lamp_fuel = 200;
+        restored
+    }
+
+    /// Piecewise linear Chebyshev sight radius: 200→10, 50→5, 0→1.
+    /// Tile centers outside this continuous radius are hidden.
+    pub fn vision_radius(&self) -> f64 {
+        if self.lamp_fuel >= 50 {
+            5.0 + f64::from(self.lamp_fuel - 50) / 30.0
+        } else {
+            1.0 + f64::from(self.lamp_fuel) * 4.0 / 50.0
         }
     }
 
@@ -127,13 +215,28 @@ impl Stats {
         let old_hp = self.hp;
         let mut damage: i32 = 0;
         for effect in &mut self.status_effects {
-            damage = damage.saturating_add(effect.damage_per_turn);
+            if !matches!(
+                effect.kind,
+                Some(EffectKind::Weakness | EffectKind::Lightning)
+            ) {
+                damage = damage.saturating_add(effect.damage_per_turn);
+            }
             effect.turns_remaining -= 1;
         }
         self.update_health(-damage);
         self.status_effects
             .retain(|effect| effect.turns_remaining > 0);
         old_hp - self.hp
+    }
+
+    /// Reduces outgoing damage for active weakness instances; combat still enforces minimum damage.
+    pub fn weaken_roll(&self, roll: u32) -> u32 {
+        self.status_effects
+            .iter()
+            .filter(|effect| effect.kind == Some(EffectKind::Weakness))
+            .fold(roll, |roll, effect| {
+                roll.saturating_sub(effect.damage_per_turn as u32)
+            })
     }
 
     /// Whether health has reached zero.
@@ -146,11 +249,58 @@ impl Stats {
 mod tests {
     use super::{Stats, StatusEffect};
 
+    #[test]
+    fn lamp_curve_turn_count_and_empty_lamp_are_bounded() {
+        let mut stats = stats();
+        for spent in 0..=220 {
+            assert_eq!(stats.turns(), spent);
+            assert_eq!(stats.lamp_fuel(), 200_u32.saturating_sub(spent as u32));
+            let radius = stats.vision_radius();
+            if let Some(expected) = match spent {
+                0 => Some(10.0),
+                75 => Some(7.5),
+                150 => Some(5.0),
+                175 => Some(3.0),
+                200..=220 => Some(1.0),
+                _ => None,
+            } {
+                assert!((radius - expected).abs() < 1e-10);
+            }
+            let previous = radius;
+            stats.spend_turn();
+            assert!(stats.vision_radius() <= previous);
+            assert!(previous - stats.vision_radius() <= 0.081);
+        }
+        assert_eq!(stats.refuel_lamp(), 200);
+        assert_eq!(stats.vision_radius(), 10.0);
+        assert_eq!(stats.refuel_lamp(), 0);
+        stats.turns = u64::MAX;
+        stats.spend_turn();
+        assert_eq!(stats.turns(), u64::MAX);
+    }
+
     fn stats() -> Stats {
         Stats::new(100, 15, 5)
     }
     fn effect(name: &str, damage: i32, turns: u32) -> StatusEffect {
         StatusEffect::new(String::from(name), damage, turns)
+    }
+
+    #[test]
+    fn bleed_and_weakness_have_independent_durations_and_behavior() {
+        use super::{EffectKind, EffectSpec};
+        let mut stats = stats();
+        stats.add_status_effect(EffectSpec::weapon(EffectKind::Bleed, 2, 3).instantiate());
+        stats.add_status_effect(EffectSpec::weapon(EffectKind::Weakness, 3, 2).instantiate());
+        assert_eq!(stats.weaken_roll(10), 7);
+        assert_eq!(stats.weaken_roll(1), 0);
+        assert_eq!(stats.tick_status_effects(), 2);
+        assert_eq!(stats.weaken_roll(10), 7);
+        assert_eq!(stats.tick_status_effects(), 2);
+        assert_eq!(stats.weaken_roll(10), 10);
+        assert_eq!(stats.tick_status_effects(), 2);
+        assert!(stats.status_effects().is_empty());
+        assert_eq!(stats.hp(), 94);
     }
 
     #[test]

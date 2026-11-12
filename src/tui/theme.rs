@@ -300,7 +300,7 @@ mod tests {
                 level: Some(LevelView::new(&map)),
                 ..Default::default()
             };
-            let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
             for screen in [Screen::Playing, Screen::Paused] {
                 let frame = terminal
                     .draw(|frame| renderer.render(frame, &screen, &view))
@@ -405,7 +405,7 @@ color = "reset"
             level: Some(level),
             ..Default::default()
         };
-        let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         let renderer = Renderer::new(theme);
         let buffer = &terminal
             .draw(|frame| renderer.render(frame, &Screen::Playing, &view))
@@ -494,7 +494,7 @@ color = "reset"
             level: Some(LevelView::new(&map)),
             ..Default::default()
         };
-        let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
         let renderer = Renderer::new(theme);
         let buffer = &terminal
             .draw(|frame| renderer.render(frame, &Screen::Playing, &view))

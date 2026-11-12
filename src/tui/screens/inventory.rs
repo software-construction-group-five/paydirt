@@ -8,6 +8,7 @@ use crate::tui::{RenderView, theme::Theme};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},
+    text::{Line, Span},
     widgets::{List, ListItem, ListState, Paragraph},
 };
 
@@ -15,7 +16,7 @@ use ratatui::{
 pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
     let body = frame.area();
     let status_height = if view.status.health.is_some() && body.height >= 12 {
-        5
+        6
     } else {
         0
     };
@@ -44,10 +45,10 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
                     .key
                     .map_or_else(String::new, |key| format!("[{key}] "));
                 let equipped = if entry.equipped { " (equipped)" } else { "" };
-                ListItem::new(format!(
-                    "{key}{} / {}{equipped}",
-                    entry.name, entry.category
-                ))
+                let mut spans = vec![Span::raw(key)];
+                spans.extend(super::item_spans(entry.name, theme.text));
+                spans.push(Span::raw(format!(" / {}{equipped}", entry.category)));
+                ListItem::new(Line::from(spans))
             })
             .collect();
         let mut state = ListState::default().with_selected(Some(view.selected.min(rows.len() - 1)));

@@ -1,6 +1,6 @@
 //! Damage rules and outcomes shared by combat callers and Level (SDD 2, 10, 14).
 
-use crate::game::item::{Item, ItemType};
+use crate::game::item::{Item, ItemType, catalog, choose_loot, get_item};
 use rand::{Rng, RngExt};
 use std::fmt;
 
@@ -65,8 +65,18 @@ impl fmt::Display for DamageDice {
 }
 
 const EQUIPMENT_DROP_ONE_IN: u32 = 20;
+const HEALTH_POTION_DROP_ONE_IN: u32 = 5;
 
-/// Rolls a 5% equipment drop, choosing uniformly from the highest unlocked tier.
+/// Rolls equipment and an independent 20% health potion drop for one defeat.
+/// Both may drop on the same tile; fuel never drops from enemies.
+pub(crate) fn enemy_drops(depth: u32, rng: &mut impl Rng) -> impl Iterator<Item = Item> {
+    let equipment = equipment_drop(depth, catalog(), rng);
+    let potion = (rng.random_range(0..HEALTH_POTION_DROP_ONE_IN) == 0).then(|| get_item(2));
+    [equipment, potion].into_iter().flatten()
+}
+
+/// Rolls a 5% equipment drop, with 5% of successful drops allocated to armor.
+/// Weapons and armor each use their highest unlocked category tier.
 /// Caller removes the enemy once before invoking this; all randomness is supplied.
 pub(crate) fn equipment_drop(
     depth: u32,
@@ -83,10 +93,13 @@ pub(crate) fn equipment_drop(
             matches!(item.kind, ItemType::Weapon | ItemType::Armor) && item.level <= unlocked_level
         })
         .collect();
-    let tier = eligible.iter().map(|item| item.level).max()?;
-    eligible.retain(|item| item.level == tier);
-    let index = rng.random_range(0..eligible.len());
-    Some(eligible.swap_remove(index))
+    let weapon_tier = eligible
+        .iter()
+        .filter(|item| item.kind == ItemType::Weapon)
+        .map(|item| item.level)
+        .max();
+    eligible.retain(|item| item.kind == ItemType::Armor || Some(item.level) == weapon_tier);
+    choose_loot(&eligible, rng).map(|item| item.roll_spawn(depth, rng))
 }
 
 /// Applies defense to a rolled attack total, with a minimum of one damage.
@@ -118,6 +131,52 @@ mod tests {
     };
 
     #[test]
+    fn enemy_drops_include_potions_and_preserve_equipment_rarity() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(42);
+        let (mut potions, mut equipment, mut combined) = (0, 0, 0);
+        for _ in 0..40000 {
+            let drops: Vec<_> = enemy_drops(0, &mut rng).collect();
+            combined += usize::from(drops.len() == 2);
+            for item in drops {
+                assert!(!item.is_lamp_fuel());
+                if item.kind == ItemType::Consumable {
+                    assert_eq!(item, get_item(2));
+                    potions += 1;
+                } else {
+                    equipment += 1;
+                }
+            }
+        }
+        assert!((7500..8500).contains(&potions));
+        assert!((1700..2300).contains(&equipment));
+        assert!(combined > 0);
+    }
+
+    #[test]
+    fn helmets_remain_rare_drops_after_unlocking_new_tiers() {
+        use rand::{SeedableRng, rngs::StdRng};
+        for depth in [0_u32, 3, 6, 9, 12, u32::MAX] {
+            let mut rng = StdRng::seed_from_u64(51);
+            let (mut drops, mut helmets, mut weapons) = (0, 0, 0);
+            for _ in 0..40000 {
+                if let Some(item) = equipment_drop(depth, crate::game::item::catalog(), &mut rng) {
+                    drops += 1;
+                    if item.kind == ItemType::Armor {
+                        helmets += 1;
+                        assert_eq!(item.combat().defense(), 1 + (depth / 3).min(4) as i32);
+                    } else {
+                        weapons += 1;
+                    }
+                }
+            }
+            assert!((1700..2300).contains(&drops));
+            assert!((60..140).contains(&helmets));
+            assert!(weapons > helmets * 10);
+        }
+    }
+
+    #[test]
     fn supported_dice_roll_independent_faces_with_seeded_replay() {
         use rand::{SeedableRng, rngs::StdRng};
         for die in [Die::D4, Die::D6, Die::D12] {
@@ -145,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn seeded_drops_choose_only_the_highest_unlocked_equipment_tier() {
+    fn seeded_drops_choose_highest_unlocked_tier_per_category() {
         use rand::{SeedableRng, rngs::StdRng};
         let catalog = || {
             vec![
@@ -160,7 +219,7 @@ mod tests {
             (0, vec![10]),
             (1, vec![10]),
             (2, vec![11, 12]),
-            (u32::MAX, vec![13]),
+            (u32::MAX, vec![11, 13]),
         ] {
             let mut selected = std::collections::HashSet::new();
             let mut no_drop = false;

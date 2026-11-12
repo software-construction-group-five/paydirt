@@ -8,7 +8,7 @@
 <header><div class="eyebrow">Paydirt · Development plan</div>
 <h1>Completed work and remaining tasks</h1>
 <p class="lede">The core gameplay systems are integrated. Remaining work focuses on content decisions, playtesting, final validation, and documentation.</p>
-<p class="meta">Reviewed against feature/combat-turns at 0bf82de · November 11, 2026</p>
+<p class="meta">Reviewed against feature/new-items, working tree based on 34b9813 · November 11, 2026</p>
 <nav aria-label="Development plan sections"><a href="#remaining">Remaining work</a> · <a href="#completed">Completed work</a> · <a href="#rules">Implemented rules</a> · <a href="#validation">Validation baseline</a></nav></header>
 
 <section id="remaining"><h2>Remaining work</h2>
@@ -21,9 +21,9 @@
 </ol>
 <h3>Content and balance</h3>
 <ul class="tasks">
-<li><h3>Agree on the final item catalog <span class="contract">(SDD Contract 18)</span></h3><p>Decide which additional weapons, armor, and consumables belong in this increment, including unlock levels, damage dice, defense, healing, and any on-hit effects. The current catalog contains Pickaxe, Leather Armor, and Health Potion. Record whether additional consumable behaviors are required; the existing potion behavior is already implemented.</p></li>
+<li><h3>Agree on the final item catalog <span class="contract">(SDD Contract 18)</span></h3><p>Decide which additional weapons, armor, and consumables belong in this increment, including unlock levels, damage dice, defense, healing, and any on-hit effects. The current nine-item catalog contains Pickaxe, Health Potion, Shovel, Lamp Fuel, and five helmets: Rusty, Lead, Iron, Steel, and Pete’s Helmet. Helmet bonuses increase from +1 to +5, unlocking at depths 0, 3, 6, 9, and 12. Helmets occupy 5% of floor loot and successful equipment drops; only the best unlocked helmet tier spawns. Weapons roll depth-scaled bonuses and have a 1% chance of bleed, weakness, or lightning; damage labels show the effect color. Record whether additional consumable behaviors are required; the existing potion behavior is already implemented.</p></li>
 <li><h3>Implement the approved item content <span class="contract">(SDD Contracts 7, 18, 19)</span></h3><p>After the content decision, update the catalog in <code>src/game/item.rs</code> and resolve its placeholder-item TODO. Preserve existing catalog indices and owned item data during transfers. Add behavior only for approved effects that the current damage, defense, healing, and weapon-effect support cannot express. Verify unlock levels, generated items, equipment drops, and use/equip behavior for the additions.</p></li>
-<li><h3>Playtest and tune balance</h3><p>Record results across early and deeper floors: survival, enemy detection and fleeing, damage, healing availability, item capacity, population density, and the 5% equipment-drop rate. Adjust values where the results justify changes and update the documented tuning. The current numbers are implemented defaults awaiting playtesting.</p></li>
+<li><h3>Playtest and tune balance</h3><p>Record results across early and deeper floors: survival, enemy detection and fleeing, damage, healing availability, item capacity, population density, and the 5% equipment-drop rate. Adjust values where the results justify changes and update the documented tuning. Include lamp exhaustion, refueling availability, the two-segment sight curve, and the 150-fuel descent threshold. The current numbers are implemented defaults awaiting playtesting.</p></li>
 </ul>
 <h3>Final gameplay validation <span class="contract">(SDD Contracts 1–21)</span></h3>
 <ul class="tasks">
@@ -46,8 +46,9 @@
 </ul></div></section>
 
 <section id="completed"><h2>Completed work</h2>
-<p>These capabilities are implemented together on <code>feature/combat-turns</code> and have automated coverage. Completion here describes code behavior; manual acceptance and release review are tracked above.</p>
+<p>These capabilities are implemented together on <code>feature/new-items</code> and have automated coverage. Completion here describes code behavior; manual acceptance and release review are tracked above.</p>
 <ul class="tasks">
+<li class="done"><h3>Turn counter, lamp, and fuel supplies</h3><p>Player Stats tracks elapsed spent turns and 200 starting lamp fuel. Sight decreases linearly from 10 to 5 at 50 fuel, then to 1 at zero. Every spent action burns fuel and refreshes sight; menus remain free. Lamp Fuel refills via inventory use, shares consumable capacity, and leaves 199 after its action. Exactly one extra supply spawns on the starting floor; descent adds one only below 150 fuel before that turn. Fuel is excluded from random loot and drops. Counter and fuel persist on descent and reset on restart.</p></li>
 <li class="done" id="player-movement"><h3>Player sessions, movement, and doors <span class="contract">(SDD Contracts 1–3, 6–9, 21)</span></h3><p>New Game creates the player, floor, starting equipment, and log. Cardinal movement checks terrain and occupancy; bumping a closed door opens it without moving, and bumping an enemy attacks without moving. Movement and door opening refresh sight. Pause and return-to-menu navigation are integrated.</p></li>
 <li class="done" id="level-entities"><h3>Generated floors, entities, and visibility <span class="contract">(SDD Contracts 8–12, 18–20)</span></h3><p>Connected floors contain rooms, corridors, doors, rocks, water, and stairs. Depth-based populations exclude the entire starting room and use distinct initial spawn tiles. Level owns stable enemy IDs and original ground items. Terrain walkability and actor occupancy are separate. Line of sight, persistent exploration memory, and themed rendering hide entities outside current sight. Seeded tests cover generation, placement, connectivity, and depth limits.</p></li>
 <li class="done" id="enemy-ai"><h3>Enemy detection, movement, and attacks <span class="contract">(SDD Contracts 9, 10, 13, 14)</span></h3><p>Slimes, Ghosts, and Goblins use species detection ranges with terrain line of sight. Detected enemies approach or flee based on health; blocked paths wait or try another improving cardinal step. Attacks require cardinal adjacency. Game revalidates intents and schedules one decision per surviving enemy.</p></li>
@@ -69,7 +70,7 @@
 <p>See <a href="README.md#combat-turn-order">README: combat turn order</a> and <a href="README.md#level-entity-integration-notes">level entity integration notes</a> for the concrete interfaces and timing rules.</p></section>
 
 <section id="validation"><h2>Validation baseline</h2>
-<p>On November 11, 2026, at <code>0bf82de</code>, formatting and Clippy with warnings denied passed. The offline suite passed 190 library tests, two launcher tests, and one documentation test (193 total).</p>
+<p>On November 11, 2026, the lamp working tree based on <code>34b9813</code> passed formatting and Clippy with warnings denied. The offline suite passed 209 library tests, two launcher tests, and one documentation test (212 total).</p>
 <p>Coverage includes generation invariants, visibility, AI, dice combat, effects, drops, inventory ownership and rejection cases, shared turn timing, descent and overflow, death, history, help, input configuration, and rendering. A recorded full keyboard playthrough and release audit remain open above.</p></section>
 <footer class="meta">References: <a href="README.md">README</a>, <a href="docs/sdd-report.pdf">Software Design Document</a>, <a href="docs/Coding_Standards.pdf">Coding Standards</a>, and <a href="docs/scm-paydirt.pdf">SCM Plan</a>. This plan reflects the current branch; it does not assert that the work has been approved or merged into main.</footer>
 </main></body></html>

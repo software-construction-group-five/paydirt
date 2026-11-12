@@ -143,9 +143,11 @@ impl Enemy {
 
     /// Rolls an attack with the supplied RNG; defense is applied by combat.
     pub fn get_roll(&self, rng: &mut impl Rng) -> u32 {
-        self.damage_dice()
-            .roll(rng)
-            .saturating_add(self.stats.attack() as u32)
+        self.stats.weaken_roll(
+            self.damage_dice()
+                .roll(rng)
+                .saturating_add(self.stats.attack() as u32),
+        )
     }
 
     /// Returns the species' fleeing threshold (SDD Contracts 12 and 13).

@@ -25,13 +25,22 @@ Default glyphs are `g` (red Goblin), `G` (white Ghost), `s` (green Slime),
 `)` (yellow weapon), `[` (cyan armor), and `!` (magenta consumable).
 
 `cargo run` opens the main menu. Select New Game to generate and display a floor.
-Esc pauses, Esc or Enter resumes, and m returns to the main menu. The launcher
+Esc pauses, Esc or Enter resumes, and m returns to the main menu.
+The pause panel has a `Paused` border title and a left-aligned session overview:
+current depth, elapsed turns, enemies slain (including effect kills), and items acquired
+(successful pickups, including reacquired drops; starting gear is excluded).
+These counts persist across floors and reset for each new session. The launcher
 loads both configuration files relative to the project root.
 
 ## Keybindings
 
 Edit `config/keybinds.toml` to change controls. Each action accepts a list
 of keys. Bindings are scoped by screen, with a global section for quit.
+
+Use `X` or `shift+x` for an uppercase letter and `plus` for `+`.
+Uppercase letters and shifted punctuation accept terminal events with or without
+an explicit Shift flag. Equivalent bindings, such as `plus` and `shift+plus`,
+are rejected as duplicates; Ctrl and Alt modifiers remain distinct.
 
 Press `?` from any screen to open the controls menu. It uses the same centered
 panel, colors, and backdrop as the pause overlay, sized to its text. The menu
@@ -80,11 +89,49 @@ spends no turns and consumes no RNG. On short terminals, history gets priority
 over the summary. Returning to menu or starting a new session clears selections,
 scroll position, history, and summary.
 
+## Turns, lamp fuel, and refueling
+
+Player `Stats` records elapsed spent turns and lamp fuel. New sessions start at
+zero turns with **200 turns of fuel**. Every spent action increments the counter
+and burns one fuel, including blocked moves, failed inventory attempts, lethal
+actions, and accepted or rejected descent. Menus, selection, help, pause, and
+history scrolling spend none. Empty lamps stay at zero without stopping play.
+The status panel shows elapsed turns and remaining fuel in play and inventory.
+
+The lamp's Chebyshev sight radius decreases linearly in two segments:
+
+| Fuel remaining | Sight radius |
+| ---: | ---: |
+| 200 | 10 |
+| 50 | 5 |
+| 0 | 1 |
+
+For fuel `f >= 50`, radius is `5 + (f - 50) / 30`; below 50 it is
+`1 + 4 * f / 50`. Tile centers must fall within this continuous radius, so the
+visible tile boundary changes in whole-tile steps. Sight refreshes after every
+spent action using the remaining fuel, including while stationary. Exploration
+memory persists; enemy detection keeps its own range and terrain line of sight.
+
+**Lamp Fuel** is a consumable: pick it up with `g`, select it in inventory, and
+press `u` to refill to 200. It shares the five-consumable carried limit with
+potions. A full lamp rejects use and keeps the fuel; the attempt still spends a
+turn. Successful use burns its action's fuel after refilling, leaving **199**.
+Refueling preserves health and does not reset elapsed turns.
+
+Every new game generates **exactly one extra fuel item**. On descent, generate
+one only if fuel is **below 150 before spending the descent turn**; with 150 or
+more, generate none. Fuel is separate from ordinary random loot and enemy drops.
+It reserves a distinct eligible tile before ordinary populations are placed; if
+no eligible tile exists, it falls back to the walkable player start. Accepted
+descent preserves remaining fuel and the turn counter, and lethal transition
+effects prevent generation as before.
+
 ## Level generation
 
 `LevelGenerator::generate_level(depth: u32, rng: &mut impl Rng) -> Level` returns
-an owned dungeon floor. Game supplies the RNG and decides when to request a new
-floor.
+an owned dungeon floor with one extra fuel item. Game supplies the RNG and decides
+when to request a new floor. For descent it calls
+`generate_level_with_fuel(depth, spawn_fuel, rng)` with the threshold decision.
 
 - `get_map()` and `is_walkable(position)` provide terrain access. Map dimensions
   are read through `width()`/`height()`; `positions()` and `neighbors(position)`
@@ -132,12 +179,31 @@ Difficulty eventually approaches the strongest existing species; stats do not sc
 Profiles and placement rules live in `src/game/level/generator.rs`.
 
 Each floor targets `4 + min(depth, 16)` enemies and
-`3 + min(depth / 3, 5)` items. Candidates are shuffled once and consumed without
+`3 + min(depth / 3, 5)` ordinary items, plus the conditional fuel supply. Candidates are shuffled once and consumed without
 replacement. On cramped floors, reserve up to half the available tiles for items,
 then place as many enemies and items as fit. Placement terminates with no retries.
 
-Items are chosen uniformly from eligible entries exposed by `item::catalog()`.
-The catalog currently contains Pickaxe, Leather Armor, and Health Potion.
+Items come from eligible entries exposed by `item::catalog()`. Floor loot has a
+5% helmet chance, independent of the number of unlocked helmets. Otherwise it
+chooses among Pickaxe, Shovel, and Health Potion with weights 2, 2, and 1,
+respectively. Health Potions therefore make up 19% of ordinary floor loot.
+Only the highest
+unlocked helmet tier is selected; weaker helmets stop spawning when an upgrade
+unlocks. The nine-item catalog contains those three items, five helmets, and Lamp Fuel.
+Fuel never enters this random selection.
+
+| Helmet | Armor bonus | First dungeon depth | Catalog level |
+| --- | ---: | ---: | ---: |
+| Rusty Helmet | +1 | 0 | 1 |
+| Lead Helmet | +2 | 3 | 4 |
+| Iron Helmet | +3 | 6 | 7 |
+| Steel Helmet | +4 | 9 | 10 |
+| Pete's Helmet | +5 | 12 | 13 |
+
+Helmets use the existing armor slot and have fixed stats. Rusty Helmet preserves
+the former Leather Armor's +1 defense and catalog index. The maximum helmet
+bonus is +5; the player's base defense of 1 makes maximum total defense 6.
+
 Catalog level one is available at dungeon depth zero; availability uses saturating
 `depth + 1`. Identical depth and RNG seed reproduce terrain and population.
 
@@ -152,12 +218,13 @@ later indices, so callers must rebuild selections after a removal.
 Each `Tile` owns `seen` (persistent exploration memory) and `visible` (current
 line of sight), both initially false. `seen` replaces the unused `explored` field.
 The launcher-facing Game controller initializes sight at the player start on New
-Game. Call `Level::update_visibility(player_position)` after movement, floor entry,
-or sight-blocking terrain changes. Updating sight spends no turn and never clears
+Game. Game calls `Level::update_visibility_with_radius(player_position, radius)` after
+every spent action and on floor entry. `update_visibility(position)` remains a
+full-radius helper for independent callers. Updating sight spends no turn and never clears
 previously seen tiles. Invalid origins clear current visibility but preserve memory.
 
-Player sight reaches 10 tiles in each direction (Chebyshev distance), half the
-maximum generated room width. Previously seen terrain remains remembered beyond
+Player sight reaches up to 10 tiles in each direction (Chebyshev distance),
+limited by the current lamp fuel as described above. Previously seen terrain remains remembered beyond
 that range. Walls, rocks, and closed doors block sight; water,
 floor, stairs, and open doors transmit it. The first opaque tile remains visible.
 All eight adjacent tiles are visible regardless of blockage, revealing room corners.
@@ -247,20 +314,50 @@ sight after movement and door interactions. The launcher supplies the active pla
 position, health, and messages to the renderer. Bumping a closed door opens it
 without moving; entering it takes another action. Bumping an enemy attacks it
 without moving, rolling weapon damage and subtracting defense with a minimum
-of one damage. New games equip a 2d4 Pickaxe; supported weapon dice are d4, d6,
+of one damage. New games equip a rolled Pickaxe with base damage 2d4; supported weapon dice are d4, d6,
 and d12. Unarmed damage is 1d4. Player HP is 40; Slime/Ghost/Goblin HP is 8/14/24,
 with damage rolls of 1d4/1d6/1d12 and defense of 0/1/2. Player base defense is 1,
-and Leather Armor adds 1. All starting flat attack modifiers are zero. Damage
+and Rusty Helmet adds 1 (later helmets add up to 5). All starting flat attack modifiers are zero. Damage
 rolls use Game’s RNG; reading weapon data and rendering never roll dice.
 Messages report actual damage, weapon effects, defeat, and drops using species
 names without enemy IDs. Equipped item names appear in the status panel. Each defeated
-enemy has a 5% chance to drop a weapon or armor from the highest unlocked catalog
-tier (level no greater than saturating depth + 1). The current catalog only has
-level-one equipment. Entering a defeated enemy's tile takes another move.
+enemy independently has a 20% chance to drop a Health Potion and a 5% chance
+to drop equipment; both can drop together. Successful equipment drops select helmets 5% of
+the time and weapons 95% of the time, giving a 0.25% helmet chance per kill.
+Each category uses its own highest unlocked catalog tier (level no greater than
+saturating depth + 1), so deeper helmets never displace weapons from the drop pool. Weapon drops roll their bonuses and rare effects at the current depth. Entering a defeated enemy's tile takes another move.
 Movement attempts, door opening, and waiting report a spent turn, including blocked
 attempts by a living player. Dead-player gameplay actions are ignored without
 spending turns. Normal combat deaths immediately enter GameOver. Entity display
 and visibility queries do not spend turns.
+
+## Weapon rolls and rare effects
+
+Pickaxes deal base **2d4** damage; shovels deal **2d4+2**. Both unlock at
+catalog level one. Every newly created weapon (starting equipment, floor loot,
+and enemy drops) rolls once at its current dungeon depth. With
+`tier = min(depth / 4, 1000)`, its flat damage bonus is its base bonus plus
+`tier + random(0..=2 + tier)`. Attack dice still roll independently on every hit.
+Inventory transfers and floor transitions retain the original rolled values.
+
+Each weapon has a **1%** chance to gain one effect, chosen equally from:
+
+| Effect | Damage-text color | On-hit behavior |
+| --- | --- | --- |
+| Bleed | Red | Deals fixed damage for three turn boundaries, bypassing defense. |
+| Weakness | Purple | Reduces the enemy's outgoing attack roll for three turn boundaries, before defense and minimum-one damage. |
+| Lightning | Electric blue | Immediately damages other enemies within Chebyshev distance two of the target, requiring terrain line of sight and bypassing defense. |
+
+Effect power is one quarter of the weapon's average base damage (including the
+shovel's base +2), rounded up: currently **2** for both weapons. It excludes the
+random depth bonus and the attack's dice result. Lightning also triggers when the
+primary hit kills, does not chain, and uses the usual defeat/drop handling for
+splash kills. Bleed and weakness apply only to surviving targets, share the
+three-effect capacity, stack independently, and tick on the hit turn. Lightning
+is immediate and does not occupy a status slot.
+
+Inventory and equipped status labels show the full expression, for example
+`Shovel (2d4+4 Weakness)`, with only the parenthesized damage text colored.
 
 ## Combat turn order
 

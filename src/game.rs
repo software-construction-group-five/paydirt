@@ -18,7 +18,7 @@ pub mod screen;
 pub mod stats;
 
 use action::{Action, TurnResult};
-use combat::{attack_damage, equipment_drop};
+use combat::{attack_damage, enemy_drops};
 use enemy::ai::{self, AiProfile, Intent};
 use equipment::{Equipment, EquipmentSlot};
 use inventory::Inventory;
@@ -27,7 +27,7 @@ use message_log::MessageLog;
 use player::{ItemError, Player};
 use rand::{SeedableRng, rngs::StdRng};
 use screen::Screen;
-use stats::{Stats, StatusEffect};
+use stats::{EffectKind, Stats, StatusEffect};
 
 // Initial combat tuning; keep equipment bonuses separate from these base stats.
 const STARTING_MAX_HP: i32 = 40;
@@ -42,6 +42,15 @@ pub struct GameSummary {
     pub final_depth: u32,
     /// Human-readable cause of death.
     pub outcome: String,
+}
+
+/// Cumulative results for the current session, retained across floor transitions.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SessionStats {
+    /// Enemies defeated by direct hits, splash damage, or status effects.
+    pub enemies_slain: u64,
+    /// Successful ground-item pickups, including reacquired dropped items.
+    pub items_acquired: u64,
 }
 
 /// A selectable owned copy, independent of the item's catalog index.
@@ -63,6 +72,7 @@ pub struct Game {
     rng: StdRng,
     should_quit: bool,
     summary: Option<GameSummary>,
+    session_stats: SessionStats,
     inventory_selection: usize,
     history_offset: usize,
     help_origin: Option<Screen>,
@@ -86,6 +96,7 @@ impl Game {
             rng: StdRng::from_rng(&mut rand::rng()),
             should_quit: false,
             summary: None,
+            session_stats: SessionStats::default(),
             inventory_selection: 0,
             history_offset: 0,
             help_origin: None,
@@ -120,6 +131,11 @@ impl Game {
     /// Borrows the final results, absent during an active or unstarted session.
     pub fn summary(&self) -> Option<&GameSummary> {
         self.summary.as_ref()
+    }
+
+    /// Cumulative session counts for the pause overview.
+    pub fn session_stats(&self) -> SessionStats {
+        self.session_stats
     }
 
     /// Selected inventory row, clamped after any item transfer.
@@ -299,9 +315,20 @@ impl Game {
         };
 
         if result == TurnResult::Spent {
+            self.player.as_mut().unwrap().spend_turn();
+            self.refresh_visibility();
             self.advance_turn();
         }
         result
+    }
+
+    fn refresh_visibility(&mut self) {
+        if let (Some(player), Some(level)) = (&self.player, &mut self.level) {
+            level.update_visibility_with_radius(
+                player.get_position(),
+                player.get_stats().vision_radius(),
+            );
+        }
     }
 
     fn close_help(&mut self) {
@@ -347,12 +374,21 @@ impl Game {
                     .unwrap()
                     .unequip(slot)
                     .map(|_| format!("You unequip {name}.")),
-                (Action::UseItem, Some((InventorySelection::Carried(index), name))) => self
-                    .player
-                    .as_mut()
-                    .unwrap()
-                    .use_carried(index)
-                    .map(|healed| format!("You use {name} and restore {healed} HP.")),
+                (Action::UseItem, Some((InventorySelection::Carried(index), name))) => {
+                    let fuel =
+                        self.player.as_ref().unwrap().get_inventory().items()[index].is_lamp_fuel();
+                    self.player
+                        .as_mut()
+                        .unwrap()
+                        .use_carried(index)
+                        .map(|healed| {
+                            if fuel {
+                                format!("You refuel your lamp by {healed} turns.")
+                            } else {
+                                format!("You use {name} and restore {healed} HP.")
+                            }
+                        })
+                }
                 (Action::DropItem, Some((selection, name))) => self
                     .drop_item(selection)
                     .map(|_| format!("You drop {name}.")),
@@ -389,6 +425,7 @@ impl Game {
         player
             .receive_item(entry.item)
             .expect("carried capacity was checked");
+        self.session_stats.items_acquired = self.session_stats.items_acquired.saturating_add(1);
         self.log.add_message(message);
     }
 
@@ -427,16 +464,22 @@ impl Game {
                 .add_message("You cannot descend any farther.".to_owned());
             return false;
         };
+        let spawn_fuel = player.get_stats().lamp_fuel() < 150;
+        self.player.as_mut().unwrap().spend_turn();
+        self.refresh_visibility();
         if self.advance_player_effects() {
             return true;
         }
-        let mut level = LevelGenerator::generate_level(depth, &mut self.rng);
+        let mut level = LevelGenerator::generate_level_with_fuel(depth, spawn_fuel, &mut self.rng);
         let start = level.player_start();
         self.player
             .as_mut()
             .expect("active player survives descent")
             .set_position(start);
-        level.update_visibility(start);
+        level.update_visibility_with_radius(
+            start,
+            self.player.as_ref().unwrap().get_stats().vision_radius(),
+        );
         self.level = Some(level);
         self.log
             .add_message(format!("You descend to depth {depth}."));
@@ -551,6 +594,9 @@ impl Game {
         let Some(player) = self.player.as_mut() else {
             return false;
         };
+        if player.get_stats().status_effects().is_empty() {
+            return false;
+        }
         let effects = player.get_stats().status_effects().to_vec();
         let lost = player.tick_status_effects();
         self.log_effect_tick("You", &effects, lost);
@@ -567,7 +613,13 @@ impl Game {
         let Some(level) = self.level.as_ref() else {
             return;
         };
-        let enemy_ids: Vec<_> = level.enemies().map(|(id, _)| id).collect();
+        let enemy_ids: Vec<_> = level
+            .enemies()
+            .filter(|(_, enemy)| {
+                !enemy.stats().is_dead() && !enemy.stats().status_effects().is_empty()
+            })
+            .map(|(id, _)| id)
+            .collect();
         for id in enemy_ids {
             let Some(level) = self.level.as_mut() else {
                 return;
@@ -639,7 +691,7 @@ impl Game {
         let stats = Stats::new(STARTING_MAX_HP, STARTING_ATTACK, STARTING_DEFENSE);
         let mut equipment = Equipment::new();
         equipment
-            .equip(item::get_item(0))
+            .equip(item::get_item(0).roll_spawn(0, &mut self.rng))
             .expect("starting pickaxe is a weapon");
         self.player = Some(Player::new(
             level.player_start(),
@@ -650,6 +702,7 @@ impl Game {
         self.level = Some(level);
         self.log.clear();
         self.summary = None;
+        self.session_stats = SessionStats::default();
         self.inventory_selection = 0;
         self.history_offset = 0;
         self.help_origin = None;
@@ -670,8 +723,7 @@ impl Game {
         };
         // Bumping a closed door opens it; walking through takes another turn
         if level.open_door(target) {
-            // An open door no longer blocks sight, so refresh what the player sees
-            level.update_visibility(player.get_position());
+            // The shared turn boundary refreshes sight after burning fuel.
             return TurnResult::Spent;
         }
         if !level.is_walkable(target) {
@@ -682,7 +734,6 @@ impl Game {
             return TurnResult::Spent;
         }
         player.set_position(target);
-        level.update_visibility(target);
         TurnResult::Spent
     }
 
@@ -707,7 +758,16 @@ impl Game {
         }
         let defender = enemy.kind().to_string();
         let damage = attack_damage(player.roll_attack(&mut self.rng), enemy.stats().defense());
-        let effect = player.weapon_effect();
+        let lightning = player
+            .get_equipped_items()
+            .weapon
+            .as_ref()
+            .and_then(|item| item.combat().on_hit())
+            .filter(|effect| effect.kind() == Some(EffectKind::Lightning))
+            .map(|effect| (*enemy.position(), effect.power() as u32));
+        let effect = player
+            .weapon_effect()
+            .filter(|effect| effect.kind() != Some(EffectKind::Lightning));
         let effect_name = effect.as_ref().map(|effect| effect.name().to_owned());
         let Some(outcome) = level.damage_enemy(id, damage, effect) else {
             return;
@@ -725,9 +785,44 @@ impl Game {
         if outcome.is_dead {
             self.defeat_enemy(id);
         }
+        if let Some((center, power)) = lightning {
+            self.lightning_strike(id, center, power);
+        }
     }
 
-    /// Removes a defeated enemy once and resolves its equipment drop.
+    /// Applies immediate splash to other living enemies in sight of the impact.
+    fn lightning_strike(&mut self, primary: EnemyId, center: position::Position, power: u32) {
+        let targets: Vec<_> = self
+            .level
+            .as_ref()
+            .into_iter()
+            .flat_map(|level| {
+                level
+                    .enemies()
+                    .filter(|(id, enemy)| {
+                        *id != primary
+                            && !enemy.stats().is_dead()
+                            && center.distance(*enemy.position()) <= 2
+                            && level.get_map().has_line_of_sight(center, *enemy.position())
+                    })
+                    .map(|(id, _)| id)
+            })
+            .collect();
+        for id in targets {
+            let level = self.level.as_mut().unwrap();
+            let name = level.enemy(id).unwrap().kind().to_string();
+            let outcome = level.damage_enemy(id, power, None).unwrap();
+            self.log.add_message(format!(
+                "Lightning hits {name} for {} damage.",
+                outcome.hp_lost
+            ));
+            if outcome.is_dead {
+                self.defeat_enemy(id);
+            }
+        }
+    }
+
+    /// Removes a defeated enemy once and resolves its equipment and potion drops.
     /// Both direct attacks and effect deaths use this path.
     fn defeat_enemy(&mut self, id: EnemyId) {
         let Some(level) = self.level.as_mut() else {
@@ -749,9 +844,10 @@ impl Game {
         let Some(enemy) = level.remove_enemy(id) else {
             return;
         };
+        self.session_stats.enemies_slain = self.session_stats.enemies_slain.saturating_add(1);
         self.log
             .add_message(format!("You defeat {}.", enemy.kind()));
-        if let Some(item) = equipment_drop(level.depth(), item::catalog(), &mut self.rng) {
+        for item in enemy_drops(level.depth(), &mut self.rng) {
             let message = format!("{} drops {}.", enemy.kind(), item.name);
             level
                 .insert_ground_item(item, position)
@@ -767,6 +863,7 @@ impl Game {
         self.player = None;
         self.log.clear();
         self.summary = None;
+        self.session_stats = SessionStats::default();
         self.inventory_selection = 0;
         self.history_offset = 0;
         self.help_origin = None;
@@ -776,6 +873,273 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pause_overview_counts_successes_once_and_survives_descent() {
+        let (mut game, id, action) = combat_game(100, 1, None);
+        game.process_action(&action);
+        assert_eq!(game.session_stats().enemies_slain, 1);
+        game.defeat_enemy(id);
+        assert_eq!(game.session_stats().enemies_slain, 1);
+        let position = game.player().unwrap().get_position();
+        game.level
+            .as_mut()
+            .unwrap()
+            .insert_ground_item(item::get_item(2), position)
+            .unwrap();
+        game.process_action(&Action::Pickup);
+        game.process_action(&Action::Pickup); // Empty tile is not an acquisition.
+        assert_eq!(game.session_stats().items_acquired, 1);
+        game.process_action(&Action::OpenInventory);
+        game.process_action(&Action::DropItem);
+        game.process_action(&Action::Pickup); // Reacquiring a dropped copy counts.
+        assert_eq!(game.session_stats().items_acquired, 2);
+        game.process_action(&Action::Back);
+        let stairs = game.level().unwrap().stairs_down();
+        game.player.as_mut().unwrap().set_position(stairs);
+        game.process_action(&Action::Descend);
+        assert_eq!(
+            game.session_stats(),
+            SessionStats {
+                enemies_slain: 1,
+                items_acquired: 2
+            }
+        );
+        game.process_action(&Action::Pause);
+        game.process_action(&Action::Help);
+        game.process_action(&Action::Help);
+        assert_eq!(game.session_stats().items_acquired, 2);
+        game.process_action(&Action::Back);
+        assert_eq!(game.session_stats(), SessionStats::default());
+        game.process_action(&Action::Confirm);
+        assert_eq!(game.session_stats(), SessionStats::default());
+    }
+
+    #[test]
+    fn lamp_counts_spent_actions_refuels_and_resets() {
+        let mut game = Game::new();
+        game.rng = StdRng::seed_from_u64(123);
+        game.process_action(&Action::Confirm);
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .ground_items()
+                .iter()
+                .filter(|entry| entry.item.is_lamp_fuel())
+                .count(),
+            1
+        );
+        let ids: Vec<_> = game.level().unwrap().enemies().map(|(id, _)| id).collect();
+        for id in ids {
+            game.level.as_mut().unwrap().remove_enemy(id);
+        }
+        for action in [
+            Action::Help,
+            Action::Help,
+            Action::Pause,
+            Action::Pause,
+            Action::OpenInventory,
+            Action::MoveDown,
+            Action::Back,
+        ] {
+            assert_eq!(game.process_action(&action), TurnResult::NotSpent);
+        }
+        assert_eq!(game.player().unwrap().get_stats().turns(), 0);
+        // A rejected pickup still burns fuel, including with inventory open.
+        game.process_action(&Action::Pickup);
+        game.process_action(&Action::OpenInventory);
+        game.player
+            .as_mut()
+            .unwrap()
+            .receive_item(item::get_item(item::LAMP_FUEL_INDEX))
+            .unwrap();
+        game.process_action(&Action::UseItem);
+        assert_eq!(game.player().unwrap().get_stats().turns(), 2);
+        assert_eq!(game.player().unwrap().get_stats().lamp_fuel(), 199);
+        assert!(game.player().unwrap().get_inventory().items().is_empty());
+        game.process_action(&Action::Back);
+        for _ in 0..205 {
+            game.process_action(&Action::Wait);
+        }
+        let player = game.player().unwrap();
+        assert_eq!(player.get_stats().lamp_fuel(), 0);
+        assert!(
+            game.level().unwrap().get_map().positions().all(|p| !game
+                .level()
+                .unwrap()
+                .get_map()
+                .is_visible(p)
+                || p.distance(player.get_position()) <= 1)
+        );
+        // Movement with an empty lamp must not briefly reveal a larger radius.
+        game.level = Some(LevelGenerator::generate_level_with_fuel(
+            0,
+            false,
+            &mut game.rng,
+        ));
+        let start = game.level().unwrap().player_start();
+        game.player.as_mut().unwrap().set_position(start);
+        game.refresh_visibility();
+        let seen: Vec<_> = game
+            .level()
+            .unwrap()
+            .get_map()
+            .positions()
+            .map(|p| game.level().unwrap().get_map().get(p).unwrap().seen)
+            .collect();
+        let action = [
+            (Action::MoveLeft, -1, 0),
+            (Action::MoveRight, 1, 0),
+            (Action::MoveUp, 0, -1),
+            (Action::MoveDown, 0, 1),
+        ]
+        .into_iter()
+        .find(|(_, dx, dy)| {
+            start
+                .offset(*dx, *dy)
+                .is_some_and(|p| game.level().unwrap().is_walkable(p))
+        })
+        .unwrap()
+        .0;
+        game.process_action(&action);
+        let map = game.level().unwrap().get_map();
+        assert!(map.positions().zip(seen).all(|(p, before)| {
+            let tile = map.get(p).unwrap();
+            tile.seen == (before || tile.visible)
+        }));
+        game.process_action(&Action::Pause);
+        game.process_action(&Action::Back);
+        game.process_action(&Action::Confirm);
+        assert_eq!(game.player().unwrap().get_stats().turns(), 0);
+        assert_eq!(game.player().unwrap().get_stats().lamp_fuel(), 200);
+    }
+
+    #[test]
+    fn descent_fuel_threshold_uses_fuel_before_spending_the_turn() {
+        for fuel in [151_u32, 150, 149, 50, 0] {
+            let mut game = Game::new();
+            game.process_action(&Action::Confirm);
+            let stairs = game.level().unwrap().stairs_down();
+            let player = game.player.as_mut().unwrap();
+            player.set_position(stairs);
+            for _ in fuel..200 {
+                player.spend_turn();
+            }
+            game.process_action(&Action::Descend);
+            assert_eq!(game.level().unwrap().depth(), 1);
+            assert_eq!(
+                game.level()
+                    .unwrap()
+                    .ground_items()
+                    .iter()
+                    .filter(|entry| entry.item.is_lamp_fuel())
+                    .count(),
+                usize::from(fuel < 150)
+            );
+            assert_eq!(
+                game.player().unwrap().get_stats().turns(),
+                u64::from(201 - fuel)
+            );
+            assert_eq!(
+                game.player().unwrap().get_stats().lamp_fuel(),
+                fuel.saturating_sub(1)
+            );
+        }
+    }
+
+    #[test]
+    fn lightning_splashes_after_a_lethal_hit_without_attaching_a_dot() {
+        let (mut game, primary, action) = combat_game(
+            150,
+            1,
+            Some(stats::EffectSpec::weapon(EffectKind::Lightning, 2, 3)),
+        );
+        let secondary = another_adjacent_enemy(&mut game, enemy::EnemyType::Goblin);
+        let position = *game.level().unwrap().enemy(secondary).unwrap().position();
+        game.process_action(&action);
+        assert!(game.level().unwrap().enemy(primary).is_none());
+        let enemy = game.level().unwrap().enemy(secondary).unwrap();
+        assert_eq!(enemy.stats().hp(), 22);
+        assert!(enemy.stats().status_effects().is_empty());
+        assert!(
+            game.message_log()
+                .history()
+                .iter()
+                .any(|line| line.contains("Lightning hits Goblin for 2"))
+        );
+        game.level
+            .as_mut()
+            .unwrap()
+            .damage_enemy(secondary, 21, None);
+        game.lightning_strike(primary, position, 2);
+        assert!(game.level().unwrap().enemy(secondary).is_none());
+        let count = game
+            .message_log()
+            .history()
+            .iter()
+            .filter(|line| line.contains("defeat Goblin"))
+            .count();
+        game.lightning_strike(primary, position, 2);
+        assert_eq!(
+            game.message_log()
+                .history()
+                .iter()
+                .filter(|line| line.contains("defeat Goblin"))
+                .count(),
+            count
+        );
+    }
+
+    #[test]
+    fn weakness_reduces_enemy_damage_on_the_hit_turn_and_expires() {
+        use rand::RngExt;
+        let (mut game, id, action) = combat_game(
+            0,
+            24,
+            Some(stats::EffectSpec::weapon(EffectKind::Weakness, 2, 3)),
+        );
+        game.rng = StdRng::seed_from_u64(77);
+        let mut expected = StdRng::seed_from_u64(77);
+        let _ = game.player().unwrap().roll_attack(&mut expected);
+        let roll = game
+            .level()
+            .unwrap()
+            .enemy(id)
+            .unwrap()
+            .get_roll(&mut expected);
+        let initial_hp = game.player().unwrap().get_stats().hp();
+        let expected_loss = attack_damage(
+            roll.saturating_sub(2),
+            game.player().unwrap().effective_defense(),
+        ) as i32;
+        game.process_action(&action);
+        assert_eq!(
+            game.player().unwrap().get_stats().hp(),
+            initial_hp - expected_loss
+        );
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()[0]
+                .turns_remaining(),
+            2
+        );
+        assert_eq!(game.rng.random::<u64>(), expected.random::<u64>());
+        game.process_action(&Action::Wait);
+        game.process_action(&Action::Wait);
+        assert!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn descent_preserves_player_items_and_ticks_only_player_effects() {
@@ -808,7 +1172,7 @@ mod tests {
             .unwrap();
         game.rng = StdRng::seed_from_u64(901);
         let mut expected_rng = StdRng::seed_from_u64(901);
-        let expected = LevelGenerator::generate_level(1, &mut expected_rng);
+        let expected = LevelGenerator::generate_level_with_fuel(1, false, &mut expected_rng);
         assert_eq!(game.process_action(&Action::Descend), TurnResult::Spent);
         let player = game.player().unwrap();
         let level = game.level().unwrap();
@@ -1276,6 +1640,8 @@ mod tests {
         assert_eq!(game.summary(), Some(&summary));
         assert_eq!(game.log.history(), history);
         assert_eq!(game.player().unwrap().get_stats().hp(), 0);
+        assert_eq!(game.player().unwrap().get_stats().turns(), 1);
+        assert_eq!(game.player().unwrap().get_stats().lamp_fuel(), 199);
         assert_eq!(
             game.rng.random::<u64>(),
             StdRng::seed_from_u64(7).random::<u64>()
@@ -1359,6 +1725,8 @@ mod tests {
         assert_eq!(game.process_action(&Action::MoveUp), TurnResult::NotSpent);
         assert_eq!(game.summary(), Some(&summary));
         assert_eq!(game.message_log().history().len(), 2);
+        assert_eq!(game.player().unwrap().get_stats().turns(), 1);
+        assert_eq!(game.player().unwrap().get_stats().lamp_fuel(), 199);
         game.process_action(&Action::Confirm);
         assert!(game.summary().is_none());
         assert!(game.message_log().history().is_empty());
@@ -1423,13 +1791,10 @@ mod tests {
             .enemy(id)
             .unwrap()
             .get_roll(&mut expected_rng);
-        let drop = equipment_drop(0, item::catalog(), &mut expected_rng);
+        let drops: Vec<_> = enemy_drops(0, &mut expected_rng).collect();
         assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
         assert!(game.level().unwrap().enemy(id).is_none());
-        assert_eq!(
-            game.level().unwrap().ground_items().len(),
-            usize::from(drop.is_some())
-        );
+        assert_eq!(game.level().unwrap().ground_items().len(), drops.len());
         let log = game.message_log().history();
         assert!(log[0].contains("Goblin hits you"));
         assert_eq!(
@@ -1885,7 +2250,7 @@ mod tests {
     }
 
     #[test]
-    fn defeat_rolls_once_and_drops_owned_equipment_at_the_death_tile() {
+    fn defeat_rolls_once_and_drops_owned_loot_at_the_death_tile() {
         use rand::RngExt;
         let mut dropped = false;
         let mut skipped = false;
@@ -1901,14 +2266,16 @@ mod tests {
             game.rng = StdRng::seed_from_u64(seed);
             let mut expected_rng = StdRng::seed_from_u64(seed);
             game.player().unwrap().roll_attack(&mut expected_rng);
-            let expected = equipment_drop(0, item::catalog(), &mut expected_rng);
+            let expected: Vec<_> = enemy_drops(0, &mut expected_rng).collect();
             game.process_action(&action);
             let items = game.level().unwrap().ground_items();
-            if let Some(expected) = expected {
+            assert_eq!(items.len(), 1 + expected.len());
+            if !expected.is_empty() {
                 dropped = true;
-                assert_eq!(items.len(), 2);
-                assert_eq!(items[1].item, expected);
-                assert_eq!(items[1].position, position);
+                for (entry, expected) in items[1..].iter().zip(expected) {
+                    assert_eq!(entry.item, expected);
+                    assert_eq!(entry.position, position);
+                }
                 assert!(
                     game.message_log()
                         .history()
@@ -2026,7 +2393,8 @@ mod tests {
             let map = game.level().unwrap().get_map();
             assert!(map.positions().all(|position| {
                 map.is_visible(position)
-                    == (expected.distance(position) <= level::map::PLAYER_VISION_RADIUS
+                    == (expected.distance(position) as f64
+                        <= game.player().unwrap().get_stats().vision_radius()
                         && map.has_line_of_sight(expected, position))
             }));
 
@@ -2072,8 +2440,8 @@ mod tests {
                             let tile = level.get_map().get(position).unwrap();
                             tile.seen == seen
                                 && tile.visible
-                                    == (start.distance(position)
-                                        <= level::map::PLAYER_VISION_RADIUS
+                                    == (start.distance(position) as f64
+                                        <= game.player().unwrap().get_stats().vision_radius()
                                         && level.get_map().has_line_of_sight(start, position))
                         })
                 );
@@ -2209,7 +2577,8 @@ mod tests {
             let map = game.level().unwrap().get_map();
             assert!(map.positions().all(|position| {
                 map.is_visible(position)
-                    == (beside.distance(position) <= level::map::PLAYER_VISION_RADIUS
+                    == (beside.distance(position) as f64
+                        <= game.player().unwrap().get_stats().vision_radius()
                         && map.has_line_of_sight(beside, position))
             }));
             assert!(seen.iter().all(|&position| map.get(position).unwrap().seen));
