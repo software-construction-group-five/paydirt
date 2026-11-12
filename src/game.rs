@@ -18,7 +18,7 @@ pub mod screen;
 pub mod stats;
 
 use action::{Action, TurnResult};
-use combat::{attack_damage, equipment_drop};
+use combat::{attack_damage, enemy_drops};
 use enemy::ai::{self, AiProfile, Intent};
 use equipment::{Equipment, EquipmentSlot};
 use inventory::Inventory;
@@ -822,7 +822,7 @@ impl Game {
         }
     }
 
-    /// Removes a defeated enemy once and resolves its equipment drop.
+    /// Removes a defeated enemy once and resolves its equipment and potion drops.
     /// Both direct attacks and effect deaths use this path.
     fn defeat_enemy(&mut self, id: EnemyId) {
         let Some(level) = self.level.as_mut() else {
@@ -847,7 +847,7 @@ impl Game {
         self.session_stats.enemies_slain = self.session_stats.enemies_slain.saturating_add(1);
         self.log
             .add_message(format!("You defeat {}.", enemy.kind()));
-        if let Some(item) = equipment_drop(level.depth(), item::catalog(), &mut self.rng) {
+        for item in enemy_drops(level.depth(), &mut self.rng) {
             let message = format!("{} drops {}.", enemy.kind(), item.name);
             level
                 .insert_ground_item(item, position)
@@ -1791,13 +1791,10 @@ mod tests {
             .enemy(id)
             .unwrap()
             .get_roll(&mut expected_rng);
-        let drop = equipment_drop(0, item::catalog(), &mut expected_rng);
+        let drops: Vec<_> = enemy_drops(0, &mut expected_rng).collect();
         assert_eq!(game.process_action(&Action::Wait), TurnResult::Spent);
         assert!(game.level().unwrap().enemy(id).is_none());
-        assert_eq!(
-            game.level().unwrap().ground_items().len(),
-            usize::from(drop.is_some())
-        );
+        assert_eq!(game.level().unwrap().ground_items().len(), drops.len());
         let log = game.message_log().history();
         assert!(log[0].contains("Goblin hits you"));
         assert_eq!(
@@ -2253,7 +2250,7 @@ mod tests {
     }
 
     #[test]
-    fn defeat_rolls_once_and_drops_owned_equipment_at_the_death_tile() {
+    fn defeat_rolls_once_and_drops_owned_loot_at_the_death_tile() {
         use rand::RngExt;
         let mut dropped = false;
         let mut skipped = false;
@@ -2269,14 +2266,16 @@ mod tests {
             game.rng = StdRng::seed_from_u64(seed);
             let mut expected_rng = StdRng::seed_from_u64(seed);
             game.player().unwrap().roll_attack(&mut expected_rng);
-            let expected = equipment_drop(0, item::catalog(), &mut expected_rng);
+            let expected: Vec<_> = enemy_drops(0, &mut expected_rng).collect();
             game.process_action(&action);
             let items = game.level().unwrap().ground_items();
-            if let Some(expected) = expected {
+            assert_eq!(items.len(), 1 + expected.len());
+            if !expected.is_empty() {
                 dropped = true;
-                assert_eq!(items.len(), 2);
-                assert_eq!(items[1].item, expected);
-                assert_eq!(items[1].position, position);
+                for (entry, expected) in items[1..].iter().zip(expected) {
+                    assert_eq!(entry.item, expected);
+                    assert_eq!(entry.position, position);
+                }
                 assert!(
                     game.message_log()
                         .history()

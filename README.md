@@ -26,7 +26,7 @@ Default glyphs are `g` (red Goblin), `G` (white Ghost), `s` (green Slime),
 
 `cargo run` opens the main menu. Select New Game to generate and display a floor.
 Esc pauses, Esc or Enter resumes, and m returns to the main menu.
-The pause panel begins with `PAUSED`, followed by a left-aligned session overview:
+The pause panel has a `Paused` border title and a left-aligned session overview:
 current depth, elapsed turns, enemies slain (including effect kills), and items acquired
 (successful pickups, including reacquired drops; starting gear is excluded).
 These counts persist across floors and reset for each new session. The launcher
@@ -185,7 +185,9 @@ then place as many enemies and items as fit. Placement terminates with no retrie
 
 Items come from eligible entries exposed by `item::catalog()`. Floor loot has a
 5% helmet chance, independent of the number of unlocked helmets. Otherwise it
-chooses uniformly among Pickaxe, Shovel, and Health Potion. Only the highest
+chooses among Pickaxe, Shovel, and Health Potion with weights 2, 2, and 1,
+respectively. Health Potions therefore make up 19% of ordinary floor loot.
+Only the highest
 unlocked helmet tier is selected; weaker helmets stop spawning when an upgrade
 unlocks. The nine-item catalog contains those three items, five helmets, and Lamp Fuel.
 Fuel never enters this random selection.
@@ -319,7 +321,8 @@ and Rusty Helmet adds 1 (later helmets add up to 5). All starting flat attack mo
 rolls use Game’s RNG; reading weapon data and rendering never roll dice.
 Messages report actual damage, weapon effects, defeat, and drops using species
 names without enemy IDs. Equipped item names appear in the status panel. Each defeated
-enemy has a 5% chance to drop equipment. Successful drops select helmets 5% of
+enemy independently has a 20% chance to drop a Health Potion and a 5% chance
+to drop equipment; both can drop together. Successful equipment drops select helmets 5% of
 the time and weapons 95% of the time, giving a 0.25% helmet chance per kill.
 Each category uses its own highest unlocked catalog tier (level no greater than
 saturating depth + 1), so deeper helmets never displace weapons from the drop pool. Weapon drops roll their bonuses and rare effects at the current depth. Entering a defeated enemy's tile takes another move.

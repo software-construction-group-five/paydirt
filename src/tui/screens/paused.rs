@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Clear, Paragraph, Wrap},
 };
 
-/// Draws PAUSED followed by a left-aligned overview of the current session.
+/// Draws a left-aligned session overview inside the titled pause panel.
 pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
     let depth = view
         .level
@@ -20,7 +20,7 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
         .turns_and_fuel
         .map_or_else(|| "--".to_owned(), |(turns, _)| turns.to_string());
     let text = format!(
-        "PAUSED\n\nDepth: {depth}\nTurns: {turns}\nEnemies slain: {}\nItems acquired: {}",
+        "Depth: {depth}\nTurns: {turns}\nEnemies slain: {}\nItems acquired: {}",
         view.session_stats.enemies_slain, view.session_stats.items_acquired,
     );
     draw_overlay(frame, theme, " Paused ", &text, Alignment::Left);

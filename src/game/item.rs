@@ -317,7 +317,8 @@ pub fn catalog() -> impl Iterator<Item = Item> {
 
 /// Selects loot with a fixed 5% armor share when both categories are available.
 /// Armor is selected uniformly from the highest unlocked tier supplied by callers;
-/// other items remain uniform. Callers must filter locked items before selection.
+/// healing consumables have weight 1 and other non-armor items weight 2.
+/// Callers must filter locked items before selection.
 pub(crate) fn choose_loot(items: &[Item], rng: &mut impl Rng) -> Option<Item> {
     let armor_level = items
         .iter()
@@ -335,21 +336,27 @@ pub(crate) fn choose_loot(items: &[Item], rng: &mut impl Rng) -> Option<Item> {
             .filter(|item| item.kind != ItemType::Armor && !item.is_lamp_fuel())
     };
     let armor_count = armor().count();
-    let other_count = other().count();
-    let select_armor = other_count == 0 || (armor_count > 0 && rng.random_range(0..20) == 0);
-    let count = if select_armor {
-        armor_count
-    } else {
-        other_count
-    };
-    if count == 0 {
-        return None;
-    }
-    let index = rng.random_range(0..count);
+    let weight = |item: &Item| if item.healing().is_some() { 1 } else { 2 };
+    let other_weight: usize = other().map(weight).sum();
+    let select_armor = other_weight == 0 || (armor_count > 0 && rng.random_range(0..20) == 0);
     if select_armor {
-        armor().nth(index).cloned()
+        if armor_count == 0 {
+            return None;
+        }
+        armor().nth(rng.random_range(0..armor_count)).cloned()
     } else {
-        other().nth(index).cloned()
+        let mut roll = rng.random_range(0..other_weight);
+        other()
+            .find(|item| {
+                let weight = weight(item);
+                if roll < weight {
+                    true
+                } else {
+                    roll -= weight;
+                    false
+                }
+            })
+            .cloned()
     }
 }
 
@@ -455,9 +462,13 @@ mod tests {
                 .collect();
             let mut rng = StdRng::seed_from_u64(111);
             let mut helmets = 0;
+            let mut potions = 0;
             let expected_defense = 1 + (depth / 3).min(4) as i32;
             for _ in 0..10000 {
                 let item = super::choose_loot(&items, &mut rng).unwrap();
+                if item.healing().is_some() {
+                    potions += 1;
+                }
                 if item.kind == ItemType::Armor {
                     helmets += 1;
                     assert_eq!(item.combat().defense(), expected_defense);
@@ -467,6 +478,10 @@ mod tests {
             assert!(
                 (400..600).contains(&helmets),
                 "depth {depth}: {helmets} helmets"
+            );
+            assert!(
+                (1700..2100).contains(&potions),
+                "depth {depth}: {potions} potions"
             );
         }
         let mut rng = StdRng::seed_from_u64(1);

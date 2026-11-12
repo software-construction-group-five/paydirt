@@ -1,6 +1,6 @@
 //! Damage rules and outcomes shared by combat callers and Level (SDD 2, 10, 14).
 
-use crate::game::item::{Item, ItemType, choose_loot};
+use crate::game::item::{Item, ItemType, catalog, choose_loot, get_item};
 use rand::{Rng, RngExt};
 use std::fmt;
 
@@ -65,6 +65,15 @@ impl fmt::Display for DamageDice {
 }
 
 const EQUIPMENT_DROP_ONE_IN: u32 = 20;
+const HEALTH_POTION_DROP_ONE_IN: u32 = 5;
+
+/// Rolls equipment and an independent 20% health potion drop for one defeat.
+/// Both may drop on the same tile; fuel never drops from enemies.
+pub(crate) fn enemy_drops(depth: u32, rng: &mut impl Rng) -> impl Iterator<Item = Item> {
+    let equipment = equipment_drop(depth, catalog(), rng);
+    let potion = (rng.random_range(0..HEALTH_POTION_DROP_ONE_IN) == 0).then(|| get_item(2));
+    [equipment, potion].into_iter().flatten()
+}
 
 /// Rolls a 5% equipment drop, with 5% of successful drops allocated to armor.
 /// Weapons and armor each use their highest unlocked category tier.
@@ -120,6 +129,29 @@ mod tests {
         equipment::Equipment, inventory::Inventory, item::get_item, player::Player,
         position::Position, stats::Stats,
     };
+
+    #[test]
+    fn enemy_drops_include_potions_and_preserve_equipment_rarity() {
+        use rand::{SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::seed_from_u64(42);
+        let (mut potions, mut equipment, mut combined) = (0, 0, 0);
+        for _ in 0..40000 {
+            let drops: Vec<_> = enemy_drops(0, &mut rng).collect();
+            combined += usize::from(drops.len() == 2);
+            for item in drops {
+                assert!(!item.is_lamp_fuel());
+                if item.kind == ItemType::Consumable {
+                    assert_eq!(item, get_item(2));
+                    potions += 1;
+                } else {
+                    equipment += 1;
+                }
+            }
+        }
+        assert!((7500..8500).contains(&potions));
+        assert!((1700..2300).contains(&equipment));
+        assert!(combined > 0);
+    }
 
     #[test]
     fn helmets_remain_rare_drops_after_unlocking_new_tiers() {

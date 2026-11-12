@@ -51,7 +51,7 @@ A normal application cycle is:
 
 The application begins at the main menu without generating a floor. Starting a game generates depth zero, creates a full-health player with an equipped Pickaxe, initializes visibility, and clears previous session information. The controller supports Playing, Inventory, Paused, GameOver, and Help screens in addition to MainMenu.
 
-The pause panel shows PAUSED followed by a left-aligned overview of current depth, elapsed turns, cumulative enemies slain, and cumulative successful ground-item pickups. Direct and effect kills count once; reacquired dropped items count again, while starting gear and failed pickups do not. Counts persist across floors and reset with the session.
+The pause panel uses a Paused border title above a left-aligned overview of current depth, elapsed turns, cumulative enemies slain, and cumulative successful ground-item pickups. Direct and effect kills count once; reacquired dropped items count again, while starting gear and failed pickups do not. Counts persist across floors and reset with the session.
 
 Help remembers the underlying screen so closing the overlay restores its inventory selection or history position. Pause and help freeze gameplay. Returning to the main menu clears the active session; restarting creates new player and floor state.
 
@@ -92,7 +92,7 @@ Entities appear only in current sight. Remembered terrain does not reveal enemie
 
 Unarmed player damage is 1d4. Supported die sizes are d4, d6, and d12. Base actor attack modifiers are zero; equipped weapons add their rolled flat damage bonus. Weakness subtracts its power from the outgoing attack roll before defense. Armor adds to effective defense without rewriting base statistics. Attack damage is `max(1, weakened roll including weapon bonus − effective defense)`, and messages report actual HP lost.
 
-Moving into a cardinally adjacent enemy performs a bump attack without moving the player. Direct kills remove enemies before they can retaliate. Direct and effect kills share one defeat path, preventing duplicate removal or drops. Each defeated enemy has a 5% chance to drop equipment. Successful drops select a helmet 5% of the time and a weapon 95% of the time, giving a 0.25% helmet chance per kill. Selection uses the highest unlocked tier within each category, preventing higher-level helmets from displacing weapon drops. Weapon drops roll their bonus and rare effect at the current floor depth.
+Moving into a cardinally adjacent enemy performs a bump attack without moving the player. Direct kills remove enemies before they can retaliate. Direct and effect kills share one defeat path, preventing duplicate removal or drops. Each defeated enemy independently has a 20% chance to drop a Health Potion and a 5% chance to drop equipment; both can drop together. Successful equipment drops select a helmet 5% of the time and a weapon 95% of the time, giving a 0.25% helmet chance per kill. Selection uses the highest unlocked tier within each category, preventing higher-level helmets from displacing weapon drops. Weapon drops roll their bonus and rare effect at the current floor depth.
 
 Each newly spawned weapon has a **1%** chance to receive one on-hit effect, chosen equally from Bleed, Weakness, and Lightning. Effect power is one quarter of average base weapon damage, including the Shovel’s base bonus, rounded up with a minimum of one. It excludes the randomized depth bonus and the current attack roll; both current weapons have effect power two.
 
@@ -145,7 +145,7 @@ Detection requires range and terrain line of sight. Healthy detected enemies app
 
 New weapons roll once when created as starting equipment, generated floor loot, or enemy drops. With `tier = min(depth / 4, 1000)`, the added bonus is `tier + random(0..=2 + tier)`, inclusive. A Pickaxe therefore starts at 2d4 plus zero to two damage at depth zero; a Shovel adds its base +2 as well. The cap keeps scaling bounded at extreme depths. Attack dice continue to roll independently on each hit, while transfers and descent preserve the original weapon’s rolled data.
 
-Pickaxe, Shovel, Health Potion, and Rusty Helmet remain catalog level one. Floor loot selects helmets with a fixed 5% probability; the remaining 95% is split uniformly among the weapons and potion. Only the best unlocked helmet tier spawns, keeping armor rare as the catalog grows and avoiding obsolete helmet loot. Helmets have fixed bonuses and use the existing armor slot. The maximum helmet bonus is +5, giving 6 total defense with the player's base defense of 1. Carried limits are three weapons, one armor, and five consumables; equipped items are separate from those limits.
+Pickaxe, Shovel, Health Potion, and Rusty Helmet remain catalog level one. Floor loot selects helmets with a fixed 5% probability; the remaining 95% uses weights 2 for each weapon and 1 for Health Potions. Potions make up 19% of ordinary floor loot, shifting healing availability toward enemy drops. Only the best unlocked helmet tier spawns, keeping armor rare as the catalog grows and avoiding obsolete helmet loot. Helmets have fixed bonuses and use the existing armor slot. The maximum helmet bonus is +5, giving 6 total defense with the player's base defense of 1. Carried limits are three weapons, one armor, and five consumables; equipped items are separate from those limits.
 
 Inventory rows distinguish duplicate carried copies and equipped slots. Pickup takes the first ground item on the player’s tile after checking capacity. Equipping swaps the selected carried item into its slot and returns displaced equipment to the freed pack space. Unequipping checks capacity before changing ownership. Players can drop carried or equipped items directly onto their tile.
 
@@ -207,7 +207,7 @@ cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings
 ```
 
-The test suite passed **215 tests**: 212 library tests, two executable tests, and one documentation test. Coverage includes generation reproducibility and connectivity, spawn restrictions, visibility, AI decisions, dice calculations, drops, effect timing, inventory ownership, rejected actions, descent and overflow, death handling, restart, help, configuration parsing, and rendering across small/resized test backends.
+The test suite passed **216 tests**: 213 library tests, two executable tests, and one documentation test. Coverage includes generation reproducibility and connectivity, spawn restrictions, visibility, AI decisions, dice calculations, drops, effect timing, inventory ownership, rejected actions, descent and overflow, death handling, restart, help, configuration parsing, and rendering across small/resized test backends.
 
 Three new visibility regressions cover diagonal boundary walls in square and rectangular rooms, hidden terrain behind diagonal walls, and the vision-range boundary for floors and walls with exploration memory retained after moving away. Movement and door-opening tests now verify visibility against both terrain line of sight and the player’s lamp range cap.
 

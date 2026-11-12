@@ -215,9 +215,10 @@ mod tests {
         let help = draw_screen(80, 24, Screen::Help, &view);
         let pause = draw_screen(80, 24, Screen::Paused, &view);
         assert!(text(&help).contains("x: wait"));
-        assert!(text(&pause).contains("PAUSED"));
+        assert!(text(&pause).contains("Paused"));
+        assert!(!text(&pause).contains("PAUSED"));
         assert!(text(&pause).contains("Enemies slain: 0"));
-        assert_eq!(help[(20, 9)].fg, pause[(20, 8)].fg);
+        assert_eq!(help[(20, 9)].fg, pause[(20, 9)].fg);
         let map = crate::game::level::map::Map::new(1, 1);
         let mut level = LevelView::new(&map);
         level.depth = Some(7);
@@ -235,11 +236,10 @@ mod tests {
         };
         let pause = draw_screen(80, 24, Screen::Paused, &overview);
         for (y, label) in [
-            (9, "PAUSED"),
-            (11, "Depth: 7"),
-            (12, "Turns: 56"),
-            (13, "Enemies slain: 12"),
-            (14, "Items acquired: 34"),
+            (10, "Depth: 7"),
+            (11, "Turns: 56"),
+            (12, "Enemies slain: 12"),
+            (13, "Items acquired: 34"),
         ] {
             let row: String = (21..59).map(|x| pause[(x, y)].symbol()).collect();
             assert!(row.starts_with(label));
