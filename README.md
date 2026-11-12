@@ -206,7 +206,9 @@ enemy has a 5% chance to drop a weapon or armor from the highest unlocked catalo
 tier (level no greater than saturating depth + 1). The current catalog only has
 level-one equipment. Entering a defeated enemy's tile takes another move.
 Movement attempts, door opening, and waiting report a spent turn, including blocked
-attempts. Enemies do not retaliate yet, and status effects do not tick automatically;
+attempts by a living player. Dead-player gameplay actions are ignored without
+spending turns; pause/menu/quit remain available. Enemies do not retaliate yet,
+and status effects do not tick automatically;
 the full combat turn loop remains unfinished. PR12 does advance enemy movement
 and behavior once per spent action. Entity display and visibility queries do not
 spend turns.

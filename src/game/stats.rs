@@ -47,12 +47,15 @@ impl StatusEffect {
         }
     }
 
+    /// Name used in combat and status messages.
     pub fn name(&self) -> &str {
         &self.name
     }
+    /// Damage applied during each effect phase, bypassing defense.
     pub fn damage_per_turn(&self) -> i32 {
         self.damage_per_turn
     }
+    /// Number of effect phases before expiration.
     pub fn turns_remaining(&self) -> u32 {
         self.turns_remaining
     }
@@ -68,6 +71,7 @@ pub struct Stats {
 }
 
 impl Stats {
+    /// Creates full-health stats with positive maximum HP and nonnegative combat values.
     pub fn new(max_hp: i32, attack: i32, defense: i32) -> Self {
         assert!(max_hp > 0, "Maximum health must be positive.");
         assert!(attack >= 0, "Attack cannot be negative.");
@@ -81,18 +85,23 @@ impl Stats {
         }
     }
 
+    /// Current health, between zero and maximum HP.
     pub fn hp(&self) -> i32 {
         self.hp
     }
+    /// Maximum health.
     pub fn max_hp(&self) -> i32 {
         self.max_hp
     }
+    /// Base attack before equipment bonuses.
     pub fn attack(&self) -> i32 {
         self.attack
     }
+    /// Base defense before equipment bonuses.
     pub fn defense(&self) -> i32 {
         self.defense
     }
+    /// Borrows active effects in oldest-first order.
     pub fn status_effects(&self) -> &[StatusEffect] {
         &self.status_effects
     }
@@ -127,6 +136,7 @@ impl Stats {
         old_hp - self.hp
     }
 
+    /// Whether health has reached zero.
     pub fn is_dead(&self) -> bool {
         self.hp == 0
     }

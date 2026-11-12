@@ -137,12 +137,12 @@ impl Map {
     /// terrain changes, before presenting state. An invalid origin clears current
     /// visibility, preserves memory, and returns false.
     pub fn update_visibility(&mut self, origin: Position) -> bool {
-        // Calculate from terrain before changing flags; visibility never blocks sight.
-        let visible: Vec<_> = self
-            .positions()
-            .map(|position| self.has_line_of_sight(origin, position))
-            .collect();
-        for (tile, visible) in self.tiles.iter_mut().zip(visible) {
+        // Rays read terrain only, so flags can be updated in place without
+        // allocating a second grid for every movement or door interaction.
+        for index in 0..self.tiles.len() {
+            let position = Position::new(index % self.width, index / self.width);
+            let visible = self.has_line_of_sight(origin, position);
+            let tile = &mut self.tiles[index];
             tile.visible = visible;
             tile.seen |= visible;
         }

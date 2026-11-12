@@ -1,44 +1,39 @@
-//! Rolling log of gameplay messages ("You hit the rat.").
+//! Session message history with a bounded recent window for gameplay rendering.
 //!
-//! Written by Game, read by Renderer::draw_status.
+//! Game writes messages; presentation borrows either recent messages or history.
 
-/// Bounded list of recent messages
+/// Retains full session history and exposes the newest configured number of messages.
 pub struct MessageLog {
-    messages: Vec<String>, // A dynamically sized list of gameplay messages
-    capacity: usize,       // The maximum number of messages the message log should retain
+    messages: Vec<String>,
+    recent_capacity: usize,
 }
 
-/// Defines methods associated with MessageLog struct
 impl MessageLog {
+    /// Creates an empty history with a recent-message window of `capacity` entries.
     pub fn new(capacity: usize) -> Self {
-        // Allows game to create a MessageLog
         Self {
-            messages: Vec::new(), // Initilize an empty vector
-            capacity,
+            messages: Vec::new(),
+            recent_capacity: capacity,
         }
     }
 
-    /// Adds a message in the session history
-    /// SDD: Related to Game Contract 2 (ProcessAction), recording gameplay actions
+    /// Appends a message to the current session history.
     pub fn add_message(&mut self, message: String) {
         self.messages.push(message);
     }
 
-    /// Returns most recent messages for normal gameplay
-    /// SDD: Supports Renderer Contract 20 (RenderGameState)
-    /// Protocol 3: draw_status(player, log)
+    /// Borrows the recent window in chronological order, preserving older history.
     pub fn messages(&self) -> &[String] {
-        let start = self.messages.len().saturating_sub(self.capacity);
+        let start = self.messages.len().saturating_sub(self.recent_capacity);
         &self.messages[start..]
     }
 
-    /// Returns every message from the current Game session (pressing button like "H")
+    /// Borrows every message in the current session, in chronological order.
     pub fn history(&self) -> &[String] {
         &self.messages
     }
 
-    /// Removes all stored messages when starting a new session
-    /// SDD: Supports Game Contract 1 (InitializeGame)
+    /// Clears both full history and the recent window when the session is reset.
     pub fn clear(&mut self) {
         self.messages.clear();
     }

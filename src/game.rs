@@ -29,7 +29,7 @@ use rand::{SeedableRng, rngs::StdRng};
 use screen::Screen;
 use stats::Stats;
 
-// TODO(joseph): confirm starting stats with the team
+// Initial combat tuning; keep equipment bonuses separate from these base stats.
 const STARTING_MAX_HP: i32 = 200;
 const STARTING_ATTACK: i32 = 15;
 const STARTING_DEFENSE: i32 = 5;
@@ -125,6 +125,14 @@ impl Game {
                     self.screen = Screen::Paused;
                     TurnResult::NotSpent
                 }
+                _ if self.level.is_none()
+                    || !self
+                        .player
+                        .as_ref()
+                        .is_some_and(|player| !player.get_stats().is_dead()) =>
+                {
+                    TurnResult::NotSpent
+                }
                 Action::MoveUp => self.move_player(0, -1),
                 Action::MoveDown => self.move_player(0, 1),
                 Action::MoveLeft => self.move_player(-1, 0),
@@ -173,39 +181,25 @@ impl Game {
 
         let enemy_ids: Vec<_> = level.enemies().map(|(id, _)| id).collect();
         for id in enemy_ids {
-            // Decision-making borrows the level immutably. Mutations happen
-            // afterward, so Level remains the authority on valid moves.
-            let Some((state, intent)) = level
-                .enemy(id)
-                .filter(|enemy| !enemy.stats().is_dead())
-                .map(|enemy| {
-                    let profile = AiProfile::for_enemy(enemy);
-                    ai::decide(
-                        enemy,
-                        player_pos,
-                        profile,
-                        level
-                            .get_map()
-                            .has_line_of_sight(*enemy.position(), player_pos),
-                        |target| {
-                            target != player_pos
-                                && level.is_walkable(target)
-                                && level.enemy_at(target).is_none()
-                        },
-                    )
-                })
-            else {
+            let Some(enemy) = level.enemy(id).filter(|enemy| !enemy.stats().is_dead()) else {
                 continue;
             };
-
+            let origin = *enemy.position();
+            let profile = AiProfile::for_enemy(enemy);
+            let can_see_player = origin.distance(player_pos) <= profile.detection_range
+                && level.get_map().has_line_of_sight(origin, player_pos);
+            let (state, intent) =
+                ai::decide(enemy, player_pos, profile, can_see_player, |target| {
+                    target != player_pos
+                        && level.is_walkable(target)
+                        && level.enemy_at(target).is_none()
+                });
             level.set_enemy_ai_state(id, state);
             match intent {
                 Intent::Move { target } => {
-                    // Revalidate because earlier enemies already took turns.
-                    if target != player_pos
-                        && level.is_walkable(target)
-                        && level.enemy_at(target).is_none()
-                    {
+                    // Game enforces actor collision and one-step movement;
+                    // Level revalidates terrain and enemy occupancy.
+                    if target != player_pos && origin.is_cardinal_neighbor(target) {
                         level.move_enemy(id, target);
                     }
                 }
@@ -283,7 +277,7 @@ impl Game {
             self.defeat_enemy(id);
             return;
         }
-        let defender = format!("{:?} ({id:?})", enemy.kind());
+        let defender = format!("{} #{id}", enemy.kind());
         let damage = attack_damage(player.effective_attack(), enemy.stats().defense());
         let effect = player.weapon_effect();
         let effect_name = effect.as_ref().map(|effect| effect.name().to_owned());
@@ -328,9 +322,9 @@ impl Game {
             return;
         };
         self.log
-            .add_message(format!("You defeat {:?} ({id:?}).", enemy.kind()));
+            .add_message(format!("You defeat {} #{id}.", enemy.kind()));
         if let Some(item) = equipment_drop(level.depth(), item::catalog(), &mut self.rng) {
-            let message = format!("{:?} ({id:?}) drops {}.", enemy.kind(), item.name);
+            let message = format!("{} #{id} drops {}.", enemy.kind(), item.name);
             level
                 .insert_ground_item(item, position)
                 .expect("validated enemy death tile accepts ground items");
@@ -350,6 +344,65 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dead_player_cannot_move_wait_or_open_doors_but_can_leave_the_session() {
+        use level::map::TileType;
+        let (mut game, _, _) = combat_game(15, 100, None);
+        let level = game.level().unwrap();
+        let (door, start, bump) = level
+            .get_map()
+            .positions()
+            .filter(|&p| level.get_map().get(p).unwrap().kind == TileType::Door { open: false })
+            .find_map(|door| {
+                [
+                    (1, 0, Action::MoveRight),
+                    (-1, 0, Action::MoveLeft),
+                    (0, 1, Action::MoveDown),
+                    (0, -1, Action::MoveUp),
+                ]
+                .into_iter()
+                .find_map(|(dx, dy, action)| {
+                    let start = door.offset(-dx, -dy)?;
+                    level.is_walkable(start).then_some((door, start, action))
+                })
+            })
+            .expect("seeded floor contains a closed door with a walkable entrance");
+        let enemies: Vec<_> = level
+            .enemies()
+            .map(|(id, enemy)| (id, *enemy.position()))
+            .collect();
+        let player = game.player.as_mut().unwrap();
+        player.set_position(start);
+        player.update_health(-200, None);
+        for action in [
+            bump,
+            Action::Wait,
+            Action::MoveLeft,
+            Action::MoveRight,
+            Action::MoveUp,
+            Action::MoveDown,
+        ] {
+            assert_eq!(game.process_action(&action), TurnResult::NotSpent);
+            assert_eq!(game.player().unwrap().get_position(), start);
+        }
+        let level = game.level().unwrap();
+        assert_eq!(
+            level.get_map().get(door).unwrap().kind,
+            TileType::Door { open: false }
+        );
+        assert_eq!(
+            level
+                .enemies()
+                .map(|(id, enemy)| (id, *enemy.position()))
+                .collect::<Vec<_>>(),
+            enemies
+        );
+        assert!(game.message_log().history().is_empty());
+        game.process_action(&Action::Pause);
+        game.process_action(&Action::Back);
+        assert!(matches!(game.screen(), Screen::MainMenu));
+    }
 
     fn combat_game(
         attack: i32,
@@ -424,7 +477,7 @@ mod tests {
         assert_eq!(*level.enemy(other).unwrap().position(), other_position);
         assert_eq!(
             game.message_log().history(),
-            &[format!("You hit Goblin ({id:?}) for 10 damage.")]
+            &[format!("You hit Goblin #{id} for 10 damage.")]
         );
     }
 
@@ -491,7 +544,7 @@ mod tests {
         assert_eq!(game.level().unwrap().enemy(id).unwrap().stats().hp(), 100);
         game.process_action(&Action::Pause);
         game.player.as_mut().unwrap().update_health(-200, None);
-        assert_eq!(game.process_action(&action), TurnResult::Spent);
+        assert_eq!(game.process_action(&action), TurnResult::NotSpent);
         assert_eq!(game.level().unwrap().enemy(id).unwrap().stats().hp(), 100);
         game.level.as_mut().unwrap().remove_enemy(id);
         game.attack_enemy(id);

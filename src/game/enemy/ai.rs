@@ -7,15 +7,13 @@
 use crate::game::enemy::{AiState, Enemy, EnemyType};
 use crate::game::position::Position;
 
-/// Detection and attack limits for a species (SDD Contract 13).
+/// Detection tuning for a species (SDD Contract 13).
 ///
 /// Fleeing thresholds belong to `Enemy` and are read from that single source.
 #[derive(Debug, Clone, Copy)]
 pub struct AiProfile {
     /// Largest Chebyshev distance at which the enemy detects the player.
     pub detection_range: usize,
-    /// Attack availability: zero disables attacks; positive values allow cardinal adjacency.
-    pub attack_range: usize,
 }
 
 impl AiProfile {
@@ -24,18 +22,9 @@ impl AiProfile {
     /// Detection uses Chebyshev distance; attacks and movement remain cardinal.
     pub fn for_enemy(enemy: &Enemy) -> Self {
         match enemy.kind() {
-            EnemyType::Goblin => Self {
-                detection_range: 5,
-                attack_range: 1,
-            },
-            EnemyType::Ghost => Self {
-                detection_range: 6,
-                attack_range: 1,
-            },
-            EnemyType::Slime => Self {
-                detection_range: 3,
-                attack_range: 1,
-            },
+            EnemyType::Goblin => Self { detection_range: 5 },
+            EnemyType::Ghost => Self { detection_range: 6 },
+            EnemyType::Slime => Self { detection_range: 3 },
         }
     }
 }
@@ -94,7 +83,7 @@ where
         return (AiState::Fleeing, intent);
     }
 
-    if enemy_pos.is_cardinal_neighbor(player_pos) && profile.attack_range >= 1 {
+    if enemy_pos.is_cardinal_neighbor(player_pos) {
         return (AiState::Attacking, Intent::Attack);
     }
 
@@ -201,8 +190,10 @@ mod tests {
         use crate::game::level::map::{Map, TileType};
         for state in [AiState::Attacking, AiState::Fleeing] {
             let mut enemy = goblin();
+            if matches!(state, AiState::Fleeing) {
+                enemy.take_damage(-61);
+            }
             enemy.set_ai_state(state);
-            enemy.take_damage(-61);
             let (state, intent) = decide(&enemy, Position::new(4, 3), profile(), false, |_| true);
             assert!(matches!(state, AiState::Idle));
             assert_eq!(intent, Intent::Wait);
@@ -324,19 +315,16 @@ mod tests {
     fn species_profiles_have_agreed_detection_and_flee_values() {
         let goblin_profile = AiProfile::for_enemy(&goblin());
         assert_eq!(goblin_profile.detection_range, 5);
-        assert_eq!(goblin_profile.attack_range, 1);
         assert_eq!(goblin().flee_below_hp(), 40);
 
         let ghost = Enemy::new(EnemyType::Ghost, Position::new(3, 3));
         let ghost_profile = AiProfile::for_enemy(&ghost);
         assert_eq!(ghost_profile.detection_range, 6);
-        assert_eq!(ghost_profile.attack_range, 1);
         assert_eq!(ghost.flee_below_hp(), 25);
 
         let slime = Enemy::new(EnemyType::Slime, Position::new(3, 3));
         let slime_profile = AiProfile::for_enemy(&slime);
         assert_eq!(slime_profile.detection_range, 3);
-        assert_eq!(slime_profile.attack_range, 1);
         assert_eq!(slime.flee_below_hp(), 0);
     }
 

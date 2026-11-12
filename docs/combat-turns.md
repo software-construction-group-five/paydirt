@@ -185,7 +185,8 @@ still allow access to the final messages through scrolling.
 - `Player::effective_attack()`, `effective_defense()`, and `weapon_effect()` read
   equipped data without changing base stats or ticking effects.
 - `Enemy::add_status_effect()` and `tick_status_effects()` use existing Stats
-  behavior; dead enemies ignore new effects and do not tick.
+  behavior; dead enemies ignore new effects and do not tick. A lethal effect
+  update sets the enemy's state to Idle, consistent with direct damage.
 - `enemy::ai::Intent` exposes Wait, Move with target, and Attack, using the existing
   `enemy::AiState` as the only behavior-state enum.
 - `Position::is_cardinal_neighbor()` provides overflow-safe attack-range geometry.
@@ -230,6 +231,14 @@ snapshots stable enemy IDs, skips removed/dead actors and dead players, computes
 range/sight decisions, applies state through `Level::set_enemy_ai_state()`, and
 revalidates movement against current occupancy. Enemy attack damage and automatic
 effect ticking remain unimplemented; phase 4 must extend this boundary.
+
+The cleanup before phase 4 removes the unused per-profile attack-range setting:
+cardinal adjacency is the shared fixed rule for all actors. Game rejects gameplay
+actions for a dead or missing player without spending turns or changing terrain;
+pause/menu/quit remain usable until game-over transitions are connected. Movement
+intents must be one cardinal step, and Level owns final terrain/occupancy checks.
+Combat messages identify enemies with species and a floor-local number (for
+example, `Goblin #3`). Tests remain inline in each module’s source file, including `src/game.rs`.
 
 ## Interfaces to implement in later phases
 

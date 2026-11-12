@@ -5,7 +5,10 @@
 pub mod generator;
 pub mod map;
 
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt,
+};
 
 use crate::game::{
     combat::DamageOutcome,
@@ -23,6 +26,12 @@ use map::Map;
 /// Stable enemy identity within one Level. IDs are never reused on that floor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EnemyId(u64);
+
+impl fmt::Display for EnemyId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 /// An owned item and its location on the floor, separate from carried items.
 pub struct GroundItem {

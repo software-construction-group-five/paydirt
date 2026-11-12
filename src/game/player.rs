@@ -8,6 +8,7 @@
 
 use crate::game::equipment::Equipment;
 use crate::game::inventory::Inventory;
+use crate::game::item::ItemType;
 use crate::game::position::Position;
 use crate::game::stats::{Stats, StatusEffect};
 
@@ -61,7 +62,7 @@ impl Player {
             self.equipment
                 .weapon
                 .as_ref()
-                .filter(|item| item.kind == crate::game::item::ItemType::Weapon)
+                .filter(|item| item.kind == ItemType::Weapon)
                 .map_or(0, |item| item.combat().attack()),
         )
     }
@@ -72,7 +73,7 @@ impl Player {
             self.equipment
                 .armor
                 .as_ref()
-                .filter(|item| item.kind == crate::game::item::ItemType::Armor)
+                .filter(|item| item.kind == ItemType::Armor)
                 .map_or(0, |item| item.combat().defense()),
         )
     }
@@ -82,7 +83,7 @@ impl Player {
         self.equipment
             .weapon
             .as_ref()
-            .filter(|item| item.kind == crate::game::item::ItemType::Weapon)?
+            .filter(|item| item.kind == ItemType::Weapon)?
             .combat()
             .on_hit()
             .map(|spec| spec.instantiate())

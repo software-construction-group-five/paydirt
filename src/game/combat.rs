@@ -3,6 +3,8 @@
 use crate::game::item::{Item, ItemType};
 use rand::{Rng, RngExt};
 
+const EQUIPMENT_DROP_ONE_IN: u32 = 20;
+
 /// Rolls a 5% equipment drop, choosing uniformly from the highest unlocked tier.
 /// Caller removes the enemy once before invoking this; all randomness is supplied.
 pub(crate) fn equipment_drop(
@@ -10,14 +12,14 @@ pub(crate) fn equipment_drop(
     catalog: impl IntoIterator<Item = Item>,
     rng: &mut impl Rng,
 ) -> Option<Item> {
-    if rng.random_range(0..20) != 0 {
+    if rng.random_range(0..EQUIPMENT_DROP_ONE_IN) != 0 {
         return None;
     }
+    let unlocked_level = depth.saturating_add(1);
     let mut eligible: Vec<_> = catalog
         .into_iter()
         .filter(|item| {
-            matches!(item.kind, ItemType::Weapon | ItemType::Armor)
-                && item.level <= depth.saturating_add(1)
+            matches!(item.kind, ItemType::Weapon | ItemType::Armor) && item.level <= unlocked_level
         })
         .collect();
     let tier = eligible.iter().map(|item| item.level).max()?;

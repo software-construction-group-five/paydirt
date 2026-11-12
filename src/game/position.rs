@@ -13,7 +13,7 @@ impl Position {
         Self { x, y }
     }
 
-    /// The position shifted by (dx, dy), or `None` if x or y would go below 0
+    /// Shifts by (dx, dy), returning None on coordinate underflow or overflow.
     pub fn offset(self, dx: isize, dy: isize) -> Option<Self> {
         let x = self.x.checked_add_signed(dx)?;
         let y = self.y.checked_add_signed(dy)?;
