@@ -5,8 +5,7 @@ A terminal roguelike about Paydirt Pete's daring escape from the mine
 Combat uses dice-based player and enemy attacks, weapon status effects, immediate
 enemy removal, rare equipment drops, and a shared turn loop. Death stops the turn
 and shows final depth, cause, and scrollable full message history. Inventory
-controls support pickup, drop, equipment swaps, and healing potions. Floor
-progression remains unfinished.
+controls support pickup, drop, equipment swaps, and healing potions. Stairs support progression between generated floors.
 
 ## Theme configuration
 
@@ -47,6 +46,7 @@ Controls are shown here instead of inline footers.
 | --- | --- | --- |
 | Any screen | `?` | Open or close the controls menu without spending a turn |
 | Help | Esc / Enter | Return to the previous screen |
+| Playing | `>` | Descend while standing on stairs |
 | Playing | `i` | Open inventory without spending a turn |
 | Playing / Inventory | `g` | Pick up the first ground item at your tile |
 | Playing / Inventory | `.` | Wait one turn without moving |
@@ -284,9 +284,13 @@ After any lethal damage update, Game stores final depth and cause, appends the
 death message, enters GameOver, and rejects further gameplay actions. The full
 message history remains available for scrolling on GameOver, retained in MessageLog
 until returning to menu or restarting. Summary, history, effects, and equipment
-reset for a new session. Floor descent remains future work; descent must
-eventually use the previously agreed transition exception
-(player effects before replacement, no enemy phase on successful descent).
+reset for a new session. Press `>` while standing on stairs to descend; movement onto stairs alone does
+not descend. Accepted descent ticks player effects on the old floor before
+replacement; lethal effects retain the old floor and final depth. Survivors enter
+the next floor at its start with health, effects, inventory, and equipment retained
+and sight initialized. Neither floor runs enemy actions or enemy effect ticks
+during this transition. Failed descent, including depth overflow, spends an ordinary
+turn. Descent is available only during play.
 
 Run `cargo fmt --check`, `cargo test --offline`, and
 `cargo clippy --offline --all-targets -- -D warnings` before review. In a terminal,

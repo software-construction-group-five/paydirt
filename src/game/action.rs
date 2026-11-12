@@ -11,6 +11,8 @@ pub enum Action {
     MoveLeft,
     MoveRight,
     Wait,
+    /// Descend while standing on stairs, ticking only player effects before entry.
+    Descend,
     /// Toggle the controls overlay without spending a turn.
     Help,
     /// Open the inventory without spending a turn.
@@ -42,6 +44,7 @@ pub enum Action {
 /// Whether an action used up a gameplay turn (Game Contract 2).
 ///
 /// Moves and waits always spend a turn, even when the move is blocked.
+/// Accepted descent spends a turn with only player effects before floor replacement.
 /// Menus, pausing, and redraws never do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnResult {

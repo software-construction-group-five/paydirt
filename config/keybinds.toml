@@ -13,6 +13,7 @@ move_down = ["down", "s"]
 confirm = ["enter"]
 
 [playing]
+descend = [">"]
 move_up = ["up", "w"]
 move_down = ["down", "s"]
 move_left = ["left", "a"]

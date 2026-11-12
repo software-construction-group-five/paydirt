@@ -212,6 +212,12 @@ impl Game {
                 Action::MoveDown => self.move_player(0, 1),
                 Action::MoveLeft => self.move_player(-1, 0),
                 Action::MoveRight => self.move_player(1, 0),
+                Action::Descend => {
+                    if self.descend() {
+                        return TurnResult::Spent;
+                    }
+                    TurnResult::Spent
+                }
                 Action::Wait => TurnResult::Spent,
                 Action::OpenInventory => {
                     self.screen = Screen::Inventory;
@@ -396,7 +402,38 @@ impl Game {
         Ok(())
     }
 
-    /// The only spent-turn boundary: enemies, player effects, then enemy effects.
+    /// Attempts a floor transition. Accepted stairs spend a turn with only player
+    /// effects; rejected attempts use the ordinary combat boundary.
+    fn descend(&mut self) -> bool {
+        let (Some(player), Some(level)) = (self.player.as_ref(), self.level.as_ref()) else {
+            return false;
+        };
+        if player.get_position() != level.stairs_down() {
+            self.log.add_message("There are no stairs here.".to_owned());
+            return false;
+        }
+        let Some(depth) = level.depth().checked_add(1) else {
+            self.log
+                .add_message("You cannot descend any farther.".to_owned());
+            return false;
+        };
+        if self.advance_player_effects() {
+            return true;
+        }
+        let mut level = LevelGenerator::generate_level(depth, &mut self.rng);
+        let start = level.player_start();
+        self.player
+            .as_mut()
+            .expect("active player survives descent")
+            .set_position(start);
+        level.update_visibility(start);
+        self.level = Some(level);
+        self.log
+            .add_message(format!("You descend to depth {depth}."));
+        true
+    }
+
+    /// Ordinary spent-turn boundary: enemies, player effects, then enemy effects.
     fn advance_turn(&mut self) {
         if self.finish_if_dead("You died.".to_owned()) {
             return;
@@ -492,8 +529,17 @@ impl Game {
 
     /// Ticks each survivor once. A player effect death skips all enemy effects.
     fn advance_effects(&mut self) {
-        let Some(player) = self.player.as_mut() else {
+        if self.advance_player_effects() {
             return;
+        }
+
+        self.advance_enemy_effects();
+    }
+
+    /// Ticks player effects and returns whether they ended the session.
+    fn advance_player_effects(&mut self) -> bool {
+        let Some(player) = self.player.as_mut() else {
+            return false;
         };
         let effects = player.get_stats().status_effects().to_vec();
         let lost = player.tick_status_effects();
@@ -503,10 +549,11 @@ impl Game {
             .map(StatusEffect::name)
             .collect::<Vec<_>>()
             .join(", ");
-        if self.finish_if_dead(format!("You died from status effects: {names}.")) {
-            return;
-        }
+        self.finish_if_dead(format!("You died from status effects: {names}."))
+    }
 
+    /// Ticks surviving enemies on the current floor in stable ID order.
+    fn advance_enemy_effects(&mut self) {
         let Some(level) = self.level.as_ref() else {
             return;
         };
@@ -719,6 +766,153 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descent_preserves_player_items_and_ticks_only_player_effects() {
+        let (mut game, _, _) = combat_game(0, 24, None);
+        let stairs = game.level().unwrap().stairs_down();
+        let player = game.player.as_mut().unwrap();
+        player.set_position(stairs);
+        player.receive_item(item::get_item(2)).unwrap();
+        player.update_health(-10, Some(StatusEffect::new("Poison".into(), 2, 3)));
+        let hp = player.get_stats().hp();
+        let equipment = player.get_equipped_items().clone();
+        let inventory = player.get_inventory().items().to_vec();
+        // An adjacent enemy must never get an action during descent.
+        let ids: Vec<_> = game.level().unwrap().enemies().map(|(id, _)| id).collect();
+        for id in ids {
+            game.level.as_mut().unwrap().remove_enemy(id);
+        }
+        let adjacent = game
+            .level()
+            .unwrap()
+            .get_map()
+            .neighbors(stairs)
+            .find(|&p| game.level().unwrap().is_walkable(p))
+            .unwrap();
+        game.level
+            .as_mut()
+            .unwrap()
+            .insert_enemy(enemy::Enemy::new(enemy::EnemyType::Goblin, adjacent))
+            .ok()
+            .unwrap();
+        game.rng = StdRng::seed_from_u64(901);
+        let mut expected_rng = StdRng::seed_from_u64(901);
+        let expected = LevelGenerator::generate_level(1, &mut expected_rng);
+        assert_eq!(game.process_action(&Action::Descend), TurnResult::Spent);
+        let player = game.player().unwrap();
+        let level = game.level().unwrap();
+        assert_eq!(level.depth(), 1);
+        assert_eq!(player.get_position(), expected.player_start());
+        assert_eq!(player.get_stats().hp(), hp - 2);
+        assert_eq!(player.get_stats().status_effects()[0].turns_remaining(), 2);
+        assert_eq!(player.get_equipped_items(), &equipment);
+        assert_eq!(player.get_inventory().items(), inventory);
+        assert!(level.get_map().is_visible(player.get_position()));
+        assert!(!game.log.history().iter().any(|m| m.contains("hits you")));
+        use rand::RngExt;
+        assert_eq!(game.rng.random::<u64>(), expected_rng.random::<u64>());
+    }
+
+    #[test]
+    fn lethal_descent_effect_keeps_old_floor_and_skips_enemy_effects_and_rng() {
+        let (mut game, id, _) = combat_game(0, 24, None);
+        let stairs = game.level().unwrap().stairs_down();
+        game.player.as_mut().unwrap().set_position(stairs);
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(0, Some(StatusEffect::new("Poison".into(), i32::MAX, 1)));
+        game.level.as_mut().unwrap().damage_enemy(
+            id,
+            0,
+            Some(StatusEffect::new("Burn".into(), 1, 2)),
+        );
+        game.rng = StdRng::seed_from_u64(901);
+        let mut expected_rng = StdRng::seed_from_u64(901);
+        assert_eq!(game.process_action(&Action::Descend), TurnResult::Spent);
+        assert_eq!(*game.screen(), Screen::GameOver);
+        assert_eq!(game.summary().unwrap().final_depth, 0);
+        assert_eq!(game.level().unwrap().depth(), 0);
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .enemy(id)
+                .unwrap()
+                .stats()
+                .status_effects()[0]
+                .turns_remaining(),
+            2
+        );
+        assert_eq!(game.process_action(&Action::Descend), TurnResult::NotSpent);
+        use rand::RngExt;
+        assert_eq!(game.rng.random::<u64>(), expected_rng.random::<u64>());
+    }
+
+    #[test]
+    fn rejected_descent_runs_one_normal_turn() {
+        let (mut game, _, _) = combat_game(0, 24, None);
+        game.player
+            .as_mut()
+            .unwrap()
+            .update_health(0, Some(StatusEffect::new("Timer".into(), 0, 2)));
+        assert_eq!(game.process_action(&Action::Descend), TurnResult::Spent);
+        assert_eq!(game.level().unwrap().depth(), 0);
+        assert_eq!(
+            game.player().unwrap().get_stats().status_effects()[0].turns_remaining(),
+            1
+        );
+        assert_eq!(
+            game.log
+                .history()
+                .iter()
+                .filter(|m| m.contains("hits you"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn maximum_depth_rejects_descent_without_overflow() {
+        let mut game = Game::new();
+        game.process_action(&Action::Confirm);
+        game.level = Some(LevelGenerator::generate_level(u32::MAX, &mut game.rng));
+        let stairs = game.level().unwrap().stairs_down();
+        game.player.as_mut().unwrap().set_position(stairs);
+        assert_eq!(game.process_action(&Action::Descend), TurnResult::Spent);
+        assert_eq!(game.level().unwrap().depth(), u32::MAX);
+        assert!(game.log.history().iter().any(|m| m.contains("farther")));
+    }
+
+    #[test]
+    fn stepping_onto_stairs_waits_for_explicit_descent() {
+        let (mut game, id, _) = combat_game(0, 24, None);
+        game.level.as_mut().unwrap().remove_enemy(id);
+        let stairs = game.level().unwrap().stairs_down();
+        let (position, action) = [
+            (-1, 0, Action::MoveRight),
+            (1, 0, Action::MoveLeft),
+            (0, -1, Action::MoveDown),
+            (0, 1, Action::MoveUp),
+        ]
+        .into_iter()
+        .find_map(|(dx, dy, action)| {
+            stairs
+                .offset(dx, dy)
+                .filter(|&p| game.level().unwrap().is_walkable(p))
+                .map(|p| (p, action))
+        })
+        .unwrap();
+        game.player.as_mut().unwrap().set_position(position);
+        game.process_action(&action);
+        assert_eq!(game.player().unwrap().get_position(), stairs);
+        assert_eq!(game.level().unwrap().depth(), 0);
+        game.process_action(&Action::Pause);
+        assert_eq!(game.process_action(&Action::Descend), TurnResult::NotSpent);
+        game.process_action(&Action::Confirm);
+        game.process_action(&Action::Descend);
+        assert_eq!(game.level().unwrap().depth(), 1);
+    }
 
     #[test]
     fn help_freezes_combat_and_restores_play_inventory_or_pause() {

@@ -166,6 +166,7 @@ fn bindings(table: BTreeMap<String, Vec<String>>) -> io::Result<Vec<Binding>> {
                 "move_left" => (Action::MoveLeft, "left"),
                 "move_right" => (Action::MoveRight, "right"),
                 "wait" => (Action::Wait, "wait"),
+                "descend" => (Action::Descend, "descend"),
                 "help" => (Action::Help, "help"),
                 "inventory" => (Action::OpenInventory, "inventory"),
                 "pickup" => (Action::Pickup, "pick up"),
@@ -316,6 +317,7 @@ mod tests {
             (Screen::Playing, KeyCode::Char('g'), Action::Pickup),
             (Screen::Playing, KeyCode::Char('.'), Action::Wait),
             (Screen::Inventory, KeyCode::Char('.'), Action::Wait),
+            (Screen::Playing, KeyCode::Char('>'), Action::Descend),
             (Screen::Inventory, KeyCode::Char('e'), Action::EquipItem),
             (Screen::Inventory, KeyCode::Char('r'), Action::UnequipItem),
             (Screen::Inventory, KeyCode::Char('u'), Action::UseItem),
@@ -420,7 +422,7 @@ mod tests {
 
     #[test]
     fn greater_than_matches_with_or_without_shift_and_detects_alias_conflicts() {
-        let source = CONFIG.replace("pause = [\"esc\"]", "pause = [\">\"]");
+        let source = CONFIG.to_owned();
         let bindings = Keybinds::parse(&source).unwrap();
         for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
             assert!(matches!(
@@ -428,7 +430,7 @@ mod tests {
                     &Screen::Playing,
                     KeyEvent::new(KeyCode::Char('>'), modifiers)
                 ),
-                Some(Action::Pause)
+                Some(Action::Descend)
             ));
         }
         assert!(Keybinds::parse(&source.replace("[\">\"]", "[\">\", \"shift+>\"]")).is_err());
