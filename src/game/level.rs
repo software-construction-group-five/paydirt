@@ -414,16 +414,16 @@ mod tests {
         let mut level = empty_level();
         let target = insert(&mut level, 1);
         let other = insert(&mut level, 2);
-        let damage = attack_damage(66, level.enemy(target).unwrap().stats().defense());
+        let damage = attack_damage(18, level.enemy(target).unwrap().stats().defense());
         assert_eq!(
             level.damage_enemy(target, damage, None),
             Some(DamageOutcome {
-                hp_lost: 61,
+                hp_lost: 16,
                 is_dead: false,
                 effect_applied: false,
             })
         );
-        assert_eq!(level.enemy(target).unwrap().stats().hp(), 39);
+        assert_eq!(level.enemy(target).unwrap().stats().hp(), 8);
         assert!(matches!(
             level.enemy(target).unwrap().ai(),
             AiState::Fleeing
@@ -432,7 +432,7 @@ mod tests {
             *level.enemy(target).unwrap().position(),
             Position::new(1, 1)
         );
-        assert_eq!(level.enemy(other).unwrap().stats().hp(), 100);
+        assert_eq!(level.enemy(other).unwrap().stats().hp(), 24);
         assert!(matches!(level.enemy(other).unwrap().ai(), AiState::Idle));
         assert_eq!(level.enemies().count(), 2);
     }
@@ -449,7 +449,7 @@ mod tests {
                 effect_applied: false,
             })
         );
-        assert_eq!(level.enemy(id).unwrap().stats().hp(), 100);
+        assert_eq!(level.enemy(id).unwrap().stats().hp(), 24);
         assert!(matches!(
             level.enemy(id).unwrap().ai(),
             crate::game::enemy::AiState::Idle
@@ -458,14 +458,14 @@ mod tests {
 
     #[test]
     fn lethal_hits_report_actual_loss_keep_identity_and_reject_effects() {
-        for damage in [100, 101, i32::MAX as u32, u32::MAX] {
+        for damage in [24, 25, i32::MAX as u32, u32::MAX] {
             let mut level = empty_level();
             let id = insert(&mut level, 1);
             let poison = || StatusEffect::new("Poison".into(), 2, 3);
             assert_eq!(
                 level.damage_enemy(id, damage, Some(poison())),
                 Some(DamageOutcome {
-                    hp_lost: 100,
+                    hp_lost: 24,
                     is_dead: true,
                     effect_applied: false,
                 })
@@ -499,7 +499,7 @@ mod tests {
         );
         assert_eq!(level.tick_enemy_effects(missing), None);
         assert_eq!(level.enemies().count(), 1);
-        assert_eq!(level.enemy(id).unwrap().stats().hp(), 100);
+        assert_eq!(level.enemy(id).unwrap().stats().hp(), 24);
         assert!(level.enemy(id).unwrap().stats().status_effects().is_empty());
         assert_eq!(level.enemy_at(Position::new(1, 1)), Some(id));
     }
@@ -510,9 +510,9 @@ mod tests {
         let id = insert(&mut level, 1);
         let other = insert(&mut level, 2);
         assert_eq!(
-            level.damage_enemy(id, 90, Some(StatusEffect::new("Poison".into(), 7, 2))),
+            level.damage_enemy(id, 14, Some(StatusEffect::new("Poison".into(), 7, 2))),
             Some(DamageOutcome {
-                hp_lost: 90,
+                hp_lost: 14,
                 is_dead: false,
                 effect_applied: true
             })
@@ -541,7 +541,7 @@ mod tests {
             })
         );
         assert!(level.enemy(id).unwrap().stats().status_effects().is_empty());
-        assert_eq!(level.enemy(other).unwrap().stats().hp(), 100);
+        assert_eq!(level.enemy(other).unwrap().stats().hp(), 24);
         assert_eq!(level.enemies().count(), 2);
     }
 
@@ -552,7 +552,7 @@ mod tests {
         assert!(level.ground_items().is_empty());
         let first = insert(&mut level, 1);
         let second = insert(&mut level, 2);
-        assert_eq!(level.remove_enemy(first).unwrap().stats().hp(), 100);
+        assert_eq!(level.remove_enemy(first).unwrap().stats().hp(), 24);
         assert!(level.enemy(first).is_none());
         assert!(level.remove_enemy(first).is_none());
         assert!(!level.move_enemy(first, Position::new(3, 1)));

@@ -2,6 +2,67 @@
 
 use crate::game::item::{Item, ItemType};
 use rand::{Rng, RngExt};
+use std::fmt;
+
+/// Supported damage dice; other die sizes cannot be constructed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Die {
+    /// Four-sided die.
+    D4,
+    /// Six-sided die.
+    D6,
+    /// Twelve-sided die.
+    D12,
+}
+
+impl Die {
+    /// Number of equally likely faces.
+    pub const fn sides(self) -> u32 {
+        match self {
+            Self::D4 => 4,
+            Self::D6 => 6,
+            Self::D12 => 12,
+        }
+    }
+}
+
+/// A positive number of identical damage dice, such as 2d4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DamageDice {
+    count: u8,
+    die: Die,
+}
+
+impl DamageDice {
+    /// Creates a pool of 1–255 supported dice. Panics for zero dice.
+    pub const fn new(count: u8, die: Die) -> Self {
+        assert!(count > 0, "Damage requires at least one die.");
+        Self { count, die }
+    }
+
+    /// Rolls every die independently with the caller's RNG.
+    pub fn roll(self, rng: &mut impl Rng) -> u32 {
+        (0..self.count)
+            .map(|_| rng.random_range(1..=self.die.sides()))
+            .sum()
+    }
+
+    /// Minimum possible total.
+    pub const fn minimum(self) -> u32 {
+        self.count as u32
+    }
+
+    /// Maximum possible total.
+    pub const fn maximum(self) -> u32 {
+        self.count as u32 * self.die.sides()
+    }
+}
+
+impl fmt::Display for DamageDice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}d{}", self.count, self.die.sides())
+    }
+}
 
 const EQUIPMENT_DROP_ONE_IN: u32 = 20;
 
@@ -28,15 +89,13 @@ pub(crate) fn equipment_drop(
     Some(eligible.swap_remove(index))
 }
 
-/// Calculates deterministic attack damage from nonnegative effective stats.
+/// Applies defense to a rolled attack total, with a minimum of one damage.
 ///
-/// Defense cannot reduce an attack below one damage. Saturating subtraction
-/// avoids overflow; equipment bonuses must already be included by the caller.
-/// Panics if either stat is negative, matching Stats' construction invariants.
-pub fn attack_damage(attack: i32, defense: i32) -> u32 {
-    assert!(attack >= 0, "Attack cannot be negative.");
+/// Roll exactly once using Player::roll_attack or Enemy::get_roll, then pass that
+/// total here. Panics for negative defense, matching Stats' invariants.
+pub fn attack_damage(roll: u32, defense: i32) -> u32 {
     assert!(defense >= 0, "Defense cannot be negative.");
-    attack.saturating_sub(defense).max(1) as u32
+    roll.saturating_sub(defense as u32).max(1)
 }
 
 /// Result of one direct-damage or effect update; does not remove the defender.
@@ -57,6 +116,33 @@ mod tests {
         equipment::Equipment, inventory::Inventory, item::get_item, player::Player,
         position::Position, stats::Stats,
     };
+
+    #[test]
+    fn supported_dice_roll_independent_faces_with_seeded_replay() {
+        use rand::{SeedableRng, rngs::StdRng};
+        for die in [Die::D4, Die::D6, Die::D12] {
+            for count in [1, 2, 3, u8::MAX] {
+                let dice = DamageDice::new(count, die);
+                let mut rng = StdRng::seed_from_u64(42);
+                let mut replay = StdRng::seed_from_u64(42);
+                for _ in 0..100 {
+                    let roll = dice.roll(&mut rng);
+                    let individual_faces: u32 = (0..count)
+                        .map(|_| replay.random_range(1..=die.sides()))
+                        .sum();
+                    assert_eq!(roll, individual_faces);
+                    assert!((dice.minimum()..=dice.maximum()).contains(&roll));
+                }
+                assert_eq!(dice.to_string(), format!("{count}d{}", die.sides()));
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Damage requires at least one die")]
+    fn zero_dice_are_rejected() {
+        DamageDice::new(0, Die::D4);
+    }
 
     #[test]
     fn seeded_drops_choose_only_the_highest_unlocked_equipment_tier() {
@@ -117,8 +203,8 @@ mod tests {
             (0, 0, 1),
             (5, 5, 1),
             (0, i32::MAX, 1),
-            (i32::MAX, 0, i32::MAX as u32),
-            (i32::MAX, i32::MAX, 1),
+            (u32::MAX, 0, u32::MAX),
+            (i32::MAX as u32, i32::MAX, 1),
         ] {
             assert_eq!(attack_damage(attack, defense), expected);
         }
@@ -130,23 +216,17 @@ mod tests {
         equipment.equip(get_item(1)).unwrap();
         let player = Player::new(
             Position::new(1, 1),
-            Stats::new(200, 15, 5),
+            Stats::new(40, 0, 1),
             Inventory::new(),
             equipment,
         );
-        for (attack, unarmored, armored) in [(12, 7, 4), (18, 13, 10), (25, 20, 17)] {
+        for (attack, unarmored, armored) in [(4, 3, 2), (6, 5, 4), (12, 11, 10)] {
             assert_eq!(
                 attack_damage(attack, player.get_stats().defense()),
                 unarmored
             );
             assert_eq!(attack_damage(attack, player.effective_defense()), armored);
         }
-    }
-
-    #[test]
-    #[should_panic(expected = "Attack cannot be negative")]
-    fn negative_attack_is_rejected() {
-        attack_damage(-1, 0);
     }
 
     #[test]

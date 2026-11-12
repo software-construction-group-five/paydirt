@@ -2,22 +2,24 @@
 //!
 //! Contract 18 Get Specific Item: look up an item by index.
 
-use crate::game::stats::EffectSpec;
+use crate::game::{
+    combat::{DamageDice, Die},
+    stats::EffectSpec,
+};
 
 /// Immutable equipment bonuses and reusable weapon effect data.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CombatModifiers {
-    attack: i32,
+    damage: Option<DamageDice>,
     defense: i32,
     on_hit: Option<EffectSpec>,
 }
 
 impl CombatModifiers {
-    /// Creates a weapon modifier with nonnegative attack and an optional effect.
-    pub fn weapon(attack: i32, on_hit: Option<EffectSpec>) -> Self {
-        assert!(attack >= 0, "Attack bonus cannot be negative.");
+    /// Creates weapon damage dice and an optional on-hit effect.
+    pub fn weapon(damage: DamageDice, on_hit: Option<EffectSpec>) -> Self {
         Self {
-            attack,
+            damage: Some(damage),
             defense: 0,
             on_hit,
         }
@@ -27,15 +29,15 @@ impl CombatModifiers {
     pub fn armor(defense: i32) -> Self {
         assert!(defense >= 0, "Defense bonus cannot be negative.");
         Self {
-            attack: 0,
+            damage: None,
             defense,
             on_hit: None,
         }
     }
 
-    /// Returns the additive attack bonus.
-    pub fn attack(&self) -> i32 {
-        self.attack
+    /// Returns weapon damage dice, if present.
+    pub fn damage(&self) -> Option<DamageDice> {
+        self.damage
     }
 
     /// Returns the additive defense bonus.
@@ -91,7 +93,7 @@ impl Item {
         assert!(
             match self.kind {
                 ItemType::Weapon => combat.defense == 0,
-                ItemType::Armor => combat.attack == 0 && combat.on_hit.is_none(),
+                ItemType::Armor => combat.damage.is_none() && combat.on_hit.is_none(),
                 ItemType::Consumable => combat == CombatModifiers::default(),
             },
             "Combat modifiers must match the item category."
@@ -108,10 +110,16 @@ impl Item {
 
 // TODO(Robert): replace placeholder items with final item list.
 // Catalog order defines the existing public item indices.
-const CATALOG: [(&str, ItemType, u32, i32, i32); 3] = [
-    ("Pickaxe", ItemType::Weapon, 1, 3, 0),
-    ("Leather Armor", ItemType::Armor, 1, 0, 3),
-    ("Health Potion", ItemType::Consumable, 1, 0, 0),
+const CATALOG: [(&str, ItemType, u32, Option<DamageDice>, i32); 3] = [
+    (
+        "Pickaxe",
+        ItemType::Weapon,
+        1,
+        Some(DamageDice::new(2, Die::D4)),
+        0,
+    ),
+    ("Leather Armor", ItemType::Armor, 1, None, 1),
+    ("Health Potion", ItemType::Consumable, 1, None, 0),
 ];
 
 /// Iterates the complete catalog in index order, constructing independent items.
@@ -138,10 +146,10 @@ pub fn get_item(index: u32) -> Item {
 
 fn catalog_item(
     index: u32,
-    (name, kind, level, attack, defense): (&str, ItemType, u32, i32, i32),
+    (name, kind, level, damage, defense): (&str, ItemType, u32, Option<DamageDice>, i32),
 ) -> Item {
     let combat = CombatModifiers {
-        attack,
+        damage,
         defense,
         on_hit: None,
     };
@@ -154,8 +162,11 @@ mod tests {
 
     #[test]
     fn catalog_modifiers_match_initial_equipment_balance() {
-        assert_eq!(get_item(0).combat().attack(), 3);
-        assert_eq!(get_item(1).combat().defense(), 3);
+        assert_eq!(
+            get_item(0).combat().damage(),
+            Some(super::DamageDice::new(2, super::Die::D4))
+        );
+        assert_eq!(get_item(1).combat().defense(), 1);
         assert_eq!(get_item(2).combat(), &super::CombatModifiers::default());
         assert!(catalog().all(|item| item.combat().on_hit().is_none()));
     }
@@ -164,7 +175,7 @@ mod tests {
     #[should_panic(expected = "Combat modifiers must match the item category")]
     fn armor_rejects_weapon_effects() {
         get_item(1).with_combat(super::CombatModifiers::weapon(
-            0,
+            super::DamageDice::new(1, super::Die::D4),
             Some(crate::game::stats::EffectSpec::new("Poison".into(), 2, 3)),
         ));
     }

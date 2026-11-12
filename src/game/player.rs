@@ -6,11 +6,13 @@
 //!
 //! Player does not validate terrain or resolve combat; Game coordinates those.
 
+use crate::game::combat::{DamageDice, Die};
 use crate::game::equipment::Equipment;
 use crate::game::inventory::Inventory;
 use crate::game::item::ItemType;
 use crate::game::position::Position;
 use crate::game::stats::{Stats, StatusEffect};
+use rand::Rng;
 
 /// Represents and manages the player state.
 pub struct Player {
@@ -56,15 +58,21 @@ impl Player {
         &self.equipment
     }
 
-    /// Returns base attack plus the equipped weapon bonus, without mutation.
-    pub fn effective_attack(&self) -> i32 {
-        self.stats.attack().saturating_add(
-            self.equipment
-                .weapon
-                .as_ref()
-                .filter(|item| item.kind == ItemType::Weapon)
-                .map_or(0, |item| item.combat().attack()),
-        )
+    /// Weapon damage dice, falling back to 1d4 when no weapon is equipped.
+    pub fn damage_dice(&self) -> DamageDice {
+        self.equipment
+            .weapon
+            .as_ref()
+            .filter(|item| item.kind == ItemType::Weapon)
+            .and_then(|item| item.combat().damage())
+            .unwrap_or(DamageDice::new(1, Die::D4))
+    }
+
+    /// Rolls damage once; Stats attack is an optional flat bonus (zero at start).
+    pub fn roll_attack(&self, rng: &mut impl Rng) -> u32 {
+        self.damage_dice()
+            .roll(rng)
+            .saturating_add(self.stats.attack() as u32)
     }
 
     /// Returns base defense plus the equipped armor bonus, without mutation.
@@ -114,28 +122,24 @@ mod tests {
     use super::{Equipment, Inventory, Player, Position, Stats, StatusEffect};
 
     #[test]
-    fn equipment_queries_are_repeatable_saturating_and_follow_unequipping() {
+    fn equipment_queries_are_repeatable_and_follow_unequipping() {
         use crate::game::item::{CombatModifiers, get_item};
         let mut p = player();
         p.equipment.equip(get_item(0)).unwrap();
         p.equipment.equip(get_item(1)).unwrap();
         for _ in 0..3 {
-            assert_eq!((p.effective_attack(), p.effective_defense()), (18, 8));
+            assert_eq!(p.damage_dice(), super::DamageDice::new(2, super::Die::D4));
+            assert_eq!(p.effective_defense(), 6);
             assert_eq!((p.stats.attack(), p.stats.defense()), (15, 5));
         }
         p.equipment
-            .equip(get_item(0).with_combat(CombatModifiers::weapon(i32::MAX, None)))
-            .unwrap();
-        p.equipment
             .equip(get_item(1).with_combat(CombatModifiers::armor(i32::MAX)))
             .unwrap();
-        assert_eq!(
-            (p.effective_attack(), p.effective_defense()),
-            (i32::MAX, i32::MAX)
-        );
+        assert_eq!(p.effective_defense(), i32::MAX);
         p.equipment.unequip_weapon();
         p.equipment.unequip_armor();
-        assert_eq!((p.effective_attack(), p.effective_defense()), (15, 5));
+        assert_eq!(p.damage_dice(), super::DamageDice::new(1, super::Die::D4));
+        assert_eq!(p.effective_defense(), 5);
     }
 
     #[test]
@@ -147,21 +151,21 @@ mod tests {
         };
         let mut p = player();
         let weapon = get_item(0).with_combat(CombatModifiers::weapon(
-            3,
-            Some(EffectSpec::new("Poison".into(), 7, 3)),
+            super::DamageDice::new(2, super::Die::D4),
+            Some(EffectSpec::new("Poison".into(), 2, 3)),
         ));
         p.equipment.equip(weapon).unwrap();
         let mut enemy = Enemy::new(EnemyType::Ghost, Position::new(2, 1));
         enemy.add_status_effect(p.weapon_effect().unwrap());
-        assert_eq!(enemy.stats().hp(), 50);
-        assert_eq!(enemy.tick_status_effects(), 7);
+        assert_eq!(enemy.stats().hp(), 14);
+        assert_eq!(enemy.tick_status_effects(), 2);
         enemy.add_status_effect(p.weapon_effect().unwrap());
         assert_eq!(enemy.stats().status_effects()[0].turns_remaining(), 2);
         assert_eq!(enemy.stats().status_effects()[1].turns_remaining(), 3);
-        assert_eq!(enemy.tick_status_effects(), 14);
-        assert_eq!(enemy.tick_status_effects(), 14);
+        assert_eq!(enemy.tick_status_effects(), 4);
+        assert_eq!(enemy.tick_status_effects(), 4);
         assert!(matches!(enemy.ai(), AiState::Fleeing));
-        assert_eq!(enemy.tick_status_effects(), 7);
+        assert_eq!(enemy.tick_status_effects(), 2);
         assert!(enemy.stats().status_effects().is_empty());
         assert_eq!(p.weapon_effect().unwrap().turns_remaining(), 3);
     }

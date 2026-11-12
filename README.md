@@ -141,8 +141,8 @@ blocked attempts all trigger this phase. Pause, menus, and redraws do not.
 | Species | Detection range (Chebyshev tiles) | Flee below HP |
 | --- | ---: | ---: |
 | Slime | 3 | 0 |
-| Ghost | 6 | 25 |
-| Goblin | 5 | 40 |
+| Ghost | 6 | 6 |
+| Goblin | 5 | 9 |
 
 Detection requires both range and terrain line of sight from the enemy to the
 player. AI uses `Map::has_line_of_sight()`, including the eight-adjacent-tile
@@ -200,8 +200,14 @@ Game owns the Player and MessageLog, checks player/enemy collisions, and refresh
 sight after movement and door interactions. The launcher supplies the active player
 position, health, and messages to the renderer. Bumping a closed door opens it
 without moving; entering it takes another action. Bumping an enemy attacks it
-without moving, using effective attack minus defense with a minimum of one damage.
-Messages report actual damage, weapon effects, defeat, and drops. Each defeated
+without moving, rolling weapon damage and subtracting defense with a minimum
+of one damage. New games equip a 2d4 Pickaxe; supported weapon dice are d4, d6,
+and d12. Unarmed damage is 1d4. Player HP is 40; Slime/Ghost/Goblin HP is 8/14/24,
+with damage rolls of 1d4/1d6/1d12 and defense of 0/1/2. Player base defense is 1,
+and Leather Armor adds 1. All starting flat attack modifiers are zero. Damage
+rolls use Game’s RNG; reading weapon data and rendering never roll dice.
+Messages report actual damage, weapon effects, defeat, and drops using species
+names without enemy IDs. Equipped item names appear in the status panel. Each defeated
 enemy has a 5% chance to drop a weapon or armor from the highest unlocked catalog
 tier (level no greater than saturating depth + 1). The current catalog only has
 level-one equipment. Entering a defeated enemy's tile takes another move.

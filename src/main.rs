@@ -82,8 +82,17 @@ fn with_view<R>(
         view.focus = player_position.or(Some(level.player_start()));
         view
     });
+    let equipment: Vec<&str> = player
+        .into_iter()
+        .flat_map(|player| {
+            let equipment = player.get_equipped_items();
+            equipment.weapon.iter().chain(equipment.armor.iter())
+        })
+        .map(|item| item.name.as_str())
+        .collect();
     let status = StatusView {
         health: player.map(|player| (player.get_stats().hp(), player.get_stats().max_hp())),
+        equipment: &equipment,
         ..Default::default()
     };
     let view = RenderView {
@@ -121,7 +130,8 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(screen.contains('@'));
-        assert!(screen.contains("Health: 200 / 200"));
+        assert!(screen.contains("Health: 40 / 40"));
+        assert!(screen.contains("Pickaxe"));
 
         let keybinds = Keybinds::parse(include_str!("../config/keybinds.toml")).unwrap();
         for code in [
@@ -152,7 +162,7 @@ mod tests {
                         .chain(level_view.items)
                         .all(|entity| { level.get_map().is_visible(entity.position) })
                 );
-                assert_eq!(view.status.health, Some((200, 200)));
+                assert_eq!(view.status.health, Some((40, 40)));
                 terminal.draw(|frame| renderer.render(frame, game.screen(), view))
             })
             .unwrap();

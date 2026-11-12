@@ -93,7 +93,7 @@ impl Stats {
     pub fn max_hp(&self) -> i32 {
         self.max_hp
     }
-    /// Base attack before equipment bonuses.
+    /// Optional flat damage modifier added after rolling dice (zero for starting actors).
     pub fn attack(&self) -> i32 {
         self.attack
     }

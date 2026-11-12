@@ -191,7 +191,7 @@ mod tests {
         for state in [AiState::Attacking, AiState::Fleeing] {
             let mut enemy = goblin();
             if matches!(state, AiState::Fleeing) {
-                enemy.take_damage(-61);
+                enemy.take_damage(-16);
             }
             enemy.set_ai_state(state);
             let (state, intent) = decide(&enemy, Position::new(4, 3), profile(), false, |_| true);
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn low_health_enemy_flees() {
         let mut enemy = goblin();
-        enemy.take_damage(-61); // Goblin: 100 -> 39 HP; flee below 40.
+        enemy.take_damage(-16); // Goblin: 24 -> 8 HP; flee below 9.
         let (state, intent) = decide(&enemy, Position::new(4, 3), profile(), true, |_| true);
         assert!(matches!(state, AiState::Fleeing));
         assert_eq!(
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn low_health_enemy_is_idle_outside_detection() {
         let mut enemy = goblin();
-        enemy.take_damage(-61);
+        enemy.take_damage(-16);
         let (state, intent) = decide(&enemy, Position::new(12, 3), profile(), true, |_| true);
         assert!(matches!(state, AiState::Idle));
         assert_eq!(intent, Intent::Wait);
@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn healing_above_threshold_ends_flee_decision() {
         let mut enemy = goblin();
-        enemy.take_damage(-61);
-        enemy.take_damage(10); // 39 -> 49 HP.
+        enemy.take_damage(-16);
+        enemy.take_damage(10); // 8 -> 18 HP.
         let (state, intent) = decide(&enemy, Position::new(4, 3), profile(), true, |_| true);
         assert!(matches!(state, AiState::Attacking));
         assert_eq!(intent, Intent::Attack);
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn slime_does_not_flee_at_one_hp() {
         let mut enemy = Enemy::new(EnemyType::Slime, Position::new(3, 3));
-        enemy.take_damage(-29);
+        enemy.take_damage(-7);
         let (state, intent) = decide(
             &enemy,
             Position::new(4, 3),
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn flee_at_origin_does_not_underflow_coordinates() {
         let mut enemy = Enemy::new(EnemyType::Goblin, Position::new(0, 0));
-        enemy.take_damage(-61);
+        enemy.take_damage(-16);
         let (state, intent) = decide(&enemy, Position::new(0, 1), profile(), true, |_| true);
         assert!(matches!(state, AiState::Fleeing));
         assert_eq!(
@@ -315,12 +315,12 @@ mod tests {
     fn species_profiles_have_agreed_detection_and_flee_values() {
         let goblin_profile = AiProfile::for_enemy(&goblin());
         assert_eq!(goblin_profile.detection_range, 5);
-        assert_eq!(goblin().flee_below_hp(), 40);
+        assert_eq!(goblin().flee_below_hp(), 9);
 
         let ghost = Enemy::new(EnemyType::Ghost, Position::new(3, 3));
         let ghost_profile = AiProfile::for_enemy(&ghost);
         assert_eq!(ghost_profile.detection_range, 6);
-        assert_eq!(ghost.flee_below_hp(), 25);
+        assert_eq!(ghost.flee_below_hp(), 6);
 
         let slime = Enemy::new(EnemyType::Slime, Position::new(3, 3));
         let slime_profile = AiProfile::for_enemy(&slime);
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn enemy_does_not_flee_at_exact_threshold() {
         let mut enemy = goblin();
-        enemy.take_damage(-60); // 100 -> 40 HP; threshold is strictly below 40.
+        enemy.take_damage(-15); // 24 -> 9 HP; threshold is strictly below 9.
         let (state, intent) = decide(
             &enemy,
             Position::new(4, 3),
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn fleeing_uses_alternative_when_preferred_tile_blocked() {
         let mut enemy = goblin();
-        enemy.take_damage(-61);
+        enemy.take_damage(-16);
         let blocked = Position::new(2, 3);
         let (state, intent) = decide(&enemy, Position::new(4, 3), profile(), true, |candidate| {
             candidate != blocked
