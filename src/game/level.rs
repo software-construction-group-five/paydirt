@@ -5,12 +5,17 @@
 pub mod generator;
 pub mod map;
 
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt,
+};
 
 use crate::game::{
+    combat::DamageOutcome,
     enemy::{AiState, Enemy},
     item::Item,
     position::Position,
+    stats::StatusEffect,
 };
 use map::Map;
 
@@ -21,6 +26,12 @@ use map::Map;
 /// Stable enemy identity within one Level. IDs are never reused on that floor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EnemyId(u64);
+
+impl fmt::Display for EnemyId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 /// An owned item and its location on the floor, separate from carried items.
 pub struct GroundItem {
@@ -164,6 +175,56 @@ impl Level {
     /// Looks up an enemy by its floor-local ID; removed or unknown IDs are absent.
     pub fn enemy(&self, id: EnemyId) -> Option<&Enemy> {
         self.enemies.get(&id)
+    }
+
+    /// Applies nonnegative direct damage and an optional on-hit effect by ID.
+    /// Damage is already calculated; defense is not subtracted again. Effects
+    /// attach only to survivors and do not tick here. Dead targets remain stored
+    /// for Game's defeat/removal path; repeated calls cannot damage or affect them.
+    /// Missing IDs return None without changing the floor or spending a turn.
+    pub fn damage_enemy(
+        &mut self,
+        id: EnemyId,
+        damage: u32,
+        effect: Option<StatusEffect>,
+    ) -> Option<DamageOutcome> {
+        let enemy = self.enemies.get_mut(&id)?;
+        let old_hp = enemy.stats().hp();
+        if old_hp == 0 {
+            return Some(DamageOutcome {
+                hp_lost: 0,
+                is_dead: true,
+                effect_applied: false,
+            });
+        }
+        // HP is bounded by i32::MAX, so larger unsigned hits are always lethal.
+        let damage = damage.min(i32::MAX as u32) as i32;
+        if damage > 0 {
+            enemy.take_damage(-damage);
+        }
+        let is_dead = enemy.stats().is_dead();
+        let effect_applied = !is_dead && effect.is_some();
+        if !is_dead && let Some(effect) = effect {
+            enemy.add_status_effect(effect);
+        }
+        Some(DamageOutcome {
+            hp_lost: old_hp - enemy.stats().hp(),
+            is_dead,
+            effect_applied,
+        })
+    }
+
+    /// Ticks one enemy's effects once, reporting actual damage and death.
+    /// Game owns scheduling and removal; this neither advances other enemies nor
+    /// rolls drops. Missing IDs return None; dead targets are unchanged.
+    pub fn tick_enemy_effects(&mut self, id: EnemyId) -> Option<DamageOutcome> {
+        let enemy = self.enemies.get_mut(&id)?;
+        let hp_lost = enemy.tick_status_effects();
+        Some(DamageOutcome {
+            hp_lost,
+            is_dead: enemy.stats().is_dead(),
+            effect_applied: false,
+        })
     }
 
     /// Applies a decision state to the identified enemy (contract 13).
@@ -348,13 +409,150 @@ mod tests {
     }
 
     #[test]
+    fn damage_targets_only_the_requested_id_and_updates_survivor_state() {
+        use crate::game::{combat::attack_damage, enemy::AiState};
+        let mut level = empty_level();
+        let target = insert(&mut level, 1);
+        let other = insert(&mut level, 2);
+        let damage = attack_damage(18, level.enemy(target).unwrap().stats().defense());
+        assert_eq!(
+            level.damage_enemy(target, damage, None),
+            Some(DamageOutcome {
+                hp_lost: 16,
+                is_dead: false,
+                effect_applied: false,
+            })
+        );
+        assert_eq!(level.enemy(target).unwrap().stats().hp(), 8);
+        assert!(matches!(
+            level.enemy(target).unwrap().ai(),
+            AiState::Fleeing
+        ));
+        assert_eq!(
+            *level.enemy(target).unwrap().position(),
+            Position::new(1, 1)
+        );
+        assert_eq!(level.enemy(other).unwrap().stats().hp(), 24);
+        assert!(matches!(level.enemy(other).unwrap().ai(), AiState::Idle));
+        assert_eq!(level.enemies().count(), 2);
+    }
+
+    #[test]
+    fn zero_damage_does_not_heal_or_wake_an_idle_enemy() {
+        let mut level = empty_level();
+        let id = insert(&mut level, 1);
+        assert_eq!(
+            level.damage_enemy(id, 0, None),
+            Some(DamageOutcome {
+                hp_lost: 0,
+                is_dead: false,
+                effect_applied: false,
+            })
+        );
+        assert_eq!(level.enemy(id).unwrap().stats().hp(), 24);
+        assert!(matches!(
+            level.enemy(id).unwrap().ai(),
+            crate::game::enemy::AiState::Idle
+        ));
+    }
+
+    #[test]
+    fn lethal_hits_report_actual_loss_keep_identity_and_reject_effects() {
+        for damage in [24, 25, i32::MAX as u32, u32::MAX] {
+            let mut level = empty_level();
+            let id = insert(&mut level, 1);
+            let poison = || StatusEffect::new("Poison".into(), 2, 3);
+            assert_eq!(
+                level.damage_enemy(id, damage, Some(poison())),
+                Some(DamageOutcome {
+                    hp_lost: 24,
+                    is_dead: true,
+                    effect_applied: false,
+                })
+            );
+            assert_eq!(level.enemy_at(Position::new(1, 1)), Some(id));
+            assert_eq!(level.enemy(id).unwrap().stats().hp(), 0);
+            assert!(level.enemy(id).unwrap().stats().status_effects().is_empty());
+            let dead = Some(DamageOutcome {
+                hp_lost: 0,
+                is_dead: true,
+                effect_applied: false,
+            });
+            assert_eq!(level.damage_enemy(id, 1, Some(poison())), dead);
+            assert_eq!(level.tick_enemy_effects(id), dead);
+            assert!(level.enemy(id).unwrap().stats().status_effects().is_empty());
+            assert!(level.ground_items().is_empty());
+            assert!(level.remove_enemy(id).is_some());
+            assert_eq!(level.damage_enemy(id, 1, None), None);
+            assert_eq!(level.tick_enemy_effects(id), None);
+        }
+    }
+
+    #[test]
+    fn missing_ids_leave_other_enemies_and_floor_unchanged() {
+        let mut level = empty_level();
+        let id = insert(&mut level, 1);
+        let missing = EnemyId(u64::MAX);
+        assert_eq!(
+            level.damage_enemy(missing, 50, Some(StatusEffect::new("Poison".into(), 1, 1))),
+            None
+        );
+        assert_eq!(level.tick_enemy_effects(missing), None);
+        assert_eq!(level.enemies().count(), 1);
+        assert_eq!(level.enemy(id).unwrap().stats().hp(), 24);
+        assert!(level.enemy(id).unwrap().stats().status_effects().is_empty());
+        assert_eq!(level.enemy_at(Position::new(1, 1)), Some(id));
+    }
+
+    #[test]
+    fn on_hit_effects_wait_for_explicit_ticks_and_can_kill_without_removal() {
+        let mut level = empty_level();
+        let id = insert(&mut level, 1);
+        let other = insert(&mut level, 2);
+        assert_eq!(
+            level.damage_enemy(id, 14, Some(StatusEffect::new("Poison".into(), 7, 2))),
+            Some(DamageOutcome {
+                hp_lost: 14,
+                is_dead: false,
+                effect_applied: true
+            })
+        );
+        let enemy = level.enemy(id).unwrap();
+        assert_eq!(enemy.stats().hp(), 10);
+        assert_eq!(enemy.stats().status_effects()[0].turns_remaining(), 2);
+        assert_eq!(
+            level.tick_enemy_effects(id),
+            Some(DamageOutcome {
+                hp_lost: 7,
+                is_dead: false,
+                effect_applied: false,
+            })
+        );
+        assert_eq!(
+            level.enemy(id).unwrap().stats().status_effects()[0].turns_remaining(),
+            1
+        );
+        assert_eq!(
+            level.tick_enemy_effects(id),
+            Some(DamageOutcome {
+                hp_lost: 3,
+                is_dead: true,
+                effect_applied: false,
+            })
+        );
+        assert!(level.enemy(id).unwrap().stats().status_effects().is_empty());
+        assert_eq!(level.enemy(other).unwrap().stats().hp(), 24);
+        assert_eq!(level.enemies().count(), 2);
+    }
+
+    #[test]
     fn enemy_ids_survive_removal_and_are_never_reused() {
         let mut level = empty_level();
         assert_eq!(level.enemies().count(), 0);
         assert!(level.ground_items().is_empty());
         let first = insert(&mut level, 1);
         let second = insert(&mut level, 2);
-        assert_eq!(level.remove_enemy(first).unwrap().stats().hp(), 25);
+        assert_eq!(level.remove_enemy(first).unwrap().stats().hp(), 24);
         assert!(level.enemy(first).is_none());
         assert!(level.remove_enemy(first).is_none());
         assert!(!level.move_enemy(first, Position::new(3, 1)));

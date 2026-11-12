@@ -4,6 +4,9 @@
 
 use crate::game::position::Position;
 
+// From a room's center, cover half the widest generated room in every direction.
+pub(crate) const PLAYER_VISION_RADIUS: usize = super::generator::MAX_ROOM_WIDTH / 2;
+
 /// Terrain kinds. Theme maps each to a display character.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TileType {
@@ -133,30 +136,55 @@ impl Map {
     }
 
     /// Recomputes sight from the player without forgetting previously seen tiles.
-    /// There is no distance limit. Call after player movement or sight-blocking
+    /// Range is half the maximum generated room width, using Chebyshev distance.
+    /// Call after player movement or sight-blocking
     /// terrain changes, before presenting state. An invalid origin clears current
     /// visibility, preserves memory, and returns false.
     pub fn update_visibility(&mut self, origin: Position) -> bool {
-        // Calculate from terrain before changing flags; visibility never blocks sight.
-        let visible: Vec<_> = self
-            .positions()
-            .map(|position| self.has_line_of_sight(origin, position))
-            .collect();
-        for (tile, visible) in self.tiles.iter_mut().zip(visible) {
+        // Rays read terrain only, so flags can be updated in place without
+        // allocating a second grid for every movement or door interaction.
+        for index in 0..self.tiles.len() {
+            let position = Position::new(index % self.width, index / self.width);
+            let visible = origin.distance(position) <= PLAYER_VISION_RADIUS
+                && self.has_line_of_sight(origin, position);
+            let tile = &mut self.tiles[index];
             tile.visible = visible;
             tile.seen |= visible;
         }
         self.in_bounds(origin)
     }
 
-    /// Tests a straight ray between tile centers, without changing exploration.
-    /// The first opaque tile is visible, but tiles behind it are hidden. Rays
-    /// crossing an exact grid corner require both side tiles to be transparent,
-    /// preventing diagonal sight through wall/door corners. Entities do not block
-    /// sight. Either endpoint outside the map returns false.
+    /// Tests a straight ray between tile centers, without changing exploration
+    /// or applying the player's vision range. AI supplies its own detection range.
+    /// Always reveals all eight adjacent tiles, even across blocked corners.
+    /// Farther away, the first opaque tile is visible but hides tiles behind it.
+    /// Beyond that neighborhood, rays crossing an exact grid corner require both
+    /// side tiles to be transparent. Opaque targets also expose their near corner
+    /// when the transparent tile immediately toward the viewer is in sight.
+    /// Entities do not block sight. Either endpoint
+    /// outside the map returns false.
     pub fn has_line_of_sight(&self, origin: Position, target: Position) -> bool {
         if !self.in_bounds(origin) || !self.in_bounds(target) {
             return false;
+        }
+        if origin.distance(target) <= 1 {
+            return true;
+        }
+        if self.blocks_sight(target) {
+            let toward = |from: usize, to: usize| match from.cmp(&to) {
+                std::cmp::Ordering::Less => 1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => -1,
+            };
+            let near = target
+                .offset(toward(target.x, origin.x), toward(target.y, origin.y))
+                .unwrap();
+            // Room corners need not have a clear ray to their centers. Seeing
+            // the open tile against the near face reveals that boundary wall.
+            // Only transparent tiles qualify, so this cannot see through walls.
+            if !self.blocks_sight(near) && self.has_line_of_sight(origin, near) {
+                return true;
+            }
         }
         let mut position = origin;
         let dx = origin.x.abs_diff(target.x) as u128;
@@ -172,12 +200,13 @@ impl Map {
             let next_y = (2 * crossed_y + 1) * dx;
             match next_x.cmp(&next_y) {
                 std::cmp::Ordering::Equal => {
+                    let diagonal = position.offset(step_x, step_y).unwrap();
                     let horizontal = position.offset(step_x, 0).unwrap();
                     let vertical = position.offset(0, step_y).unwrap();
                     if self.blocks_sight(horizontal) || self.blocks_sight(vertical) {
                         return false;
                     }
-                    position = position.offset(step_x, step_y).unwrap();
+                    position = diagonal;
                     crossed_x += 1;
                     crossed_y += 1;
                 }
@@ -227,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn sight_reveals_open_terrain_in_every_direction_without_a_distance_limit() {
+    fn sight_reveals_open_terrain_in_every_direction_within_range() {
         let mut map = open_map(11, 9);
         assert!(map.positions().all(|pos| !map.get(pos).unwrap().seen));
         let origin = Position::new(5, 4);
@@ -237,6 +266,73 @@ mod tests {
             assert!(map.has_line_of_sight(pos, origin));
             assert!(map.get(pos).unwrap().seen);
             assert!(map.is_visible(pos));
+        }
+    }
+
+    #[test]
+    fn player_vision_caps_floor_and_wall_visibility_and_preserves_memory() {
+        let mut map = open_map(35, 35);
+        let origin = Position::new(17, 17);
+        let boundary = origin.offset(PLAYER_VISION_RADIUS as isize, 0).unwrap();
+        let outside = boundary.offset(1, 0).unwrap();
+        map.set(boundary, TileType::Wall);
+        map.set(outside.offset(0, 1).unwrap(), TileType::Wall);
+        map.update_visibility(origin);
+        for position in map.positions() {
+            let tile = map.get(position).unwrap();
+            if origin.distance(position) > PLAYER_VISION_RADIUS {
+                assert!(!tile.visible && !tile.seen, "{position:?}");
+            }
+        }
+        assert!(map.is_visible(boundary));
+        let diagonal = origin
+            .offset(PLAYER_VISION_RADIUS as isize, PLAYER_VISION_RADIUS as isize)
+            .unwrap();
+        assert!(map.is_visible(diagonal));
+        // Geometry queries stay independent of player range for enemy AI.
+        assert!(map.has_line_of_sight(origin, Position::new(0, 17)));
+        map.update_visibility(Position::new(0, 17));
+        assert!(!map.is_visible(boundary));
+        assert!(map.get(boundary).unwrap().seen);
+    }
+
+    #[test]
+    fn open_room_reveals_every_boundary_wall_including_diagonal_corners() {
+        for (width, height) in [(7, 7), (11, 7), (8, 6)] {
+            let mut map = Map::new(width, height);
+            for y in 1..height - 1 {
+                for x in 1..width - 1 {
+                    map.set(Position::new(x, y), TileType::Floor);
+                }
+            }
+            let origin = Position::new(width / 2, height / 2);
+            map.update_visibility(origin);
+            for position in map.positions() {
+                let tile = map.get(position).unwrap();
+                assert!(
+                    tile.visible && tile.seen,
+                    "room {width}x{height}: {position:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn diagonal_wall_endpoint_is_visible_without_revealing_tiles_behind_it() {
+        let mut map = open_map(9, 9);
+        let origin = Position::new(1, 1);
+        let corner = Position::new(4, 4);
+        for position in [corner, Position::new(4, 3), Position::new(3, 4)] {
+            map.set(position, TileType::Wall);
+        }
+        let hidden_wall = Position::new(6, 6);
+        map.set(hidden_wall, TileType::Wall);
+        map.update_visibility(origin);
+        assert!(map.is_visible(corner));
+        assert!(map.get(corner).unwrap().seen);
+        for position in [Position::new(5, 5), hidden_wall] {
+            assert!(!map.is_visible(position));
+            assert!(!map.get(position).unwrap().seen);
         }
     }
 
@@ -303,10 +399,11 @@ mod tests {
     }
 
     #[test]
-    fn exact_corners_do_not_allow_diagonal_peeking_and_sight_is_symmetric() {
+    fn adjacent_corners_are_visible_but_distant_peeking_is_blocked_and_sight_is_symmetric() {
         let mut map = open_map(5, 5);
         map.set(Position::new(1, 0), TileType::Wall);
-        assert!(!map.has_line_of_sight(Position::new(0, 0), Position::new(1, 1)));
+        assert!(map.has_line_of_sight(Position::new(0, 0), Position::new(1, 1)));
+        assert!(!map.has_line_of_sight(Position::new(0, 0), Position::new(2, 2)));
         map.set(Position::new(2, 2), TileType::Rock);
         for from in map.positions().filter(|&pos| !map.blocks_sight(pos)) {
             for to in map.positions().filter(|&pos| !map.blocks_sight(pos)) {
@@ -317,6 +414,28 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn visibility_reveals_all_eight_neighbors_through_blockers_and_remembers_them() {
+        let mut map = Map::new(5, 5);
+        let origin = Position::new(2, 2);
+        map.set(origin, TileType::Floor);
+        map.set(Position::new(1, 2), TileType::Rock);
+        map.set(Position::new(2, 1), TileType::Door { open: false });
+        map.update_visibility(origin);
+        for position in map.positions() {
+            let tile = map.get(position).unwrap();
+            assert_eq!(tile.visible, origin.distance(position) <= 1);
+            assert_eq!(tile.seen, tile.visible);
+        }
+        map.update_visibility(Position::new(4, 4));
+        let corner = map.get(Position::new(1, 1)).unwrap();
+        assert!(corner.seen);
+        assert!(!corner.visible);
+        map.update_visibility(Position::new(0, 0));
+        assert!(map.is_visible(Position::new(1, 1)));
+        assert!(!map.has_line_of_sight(Position::new(0, 0), Position::new(usize::MAX, 0)));
     }
 
     #[test]

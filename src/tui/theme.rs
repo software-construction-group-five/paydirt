@@ -37,6 +37,8 @@ pub struct Theme {
     pub text: Style,
     /// Critical results and warnings.
     pub danger: Style,
+    /// Uniform unexplored-cell appearance; a space leaves the cell blank.
+    pub unseen: Glyph,
     /// Wall appearance.
     pub wall: Glyph,
     /// Floor appearance.
@@ -115,6 +117,8 @@ struct UiConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TileConfig {
+    #[serde(default)]
+    unseen: Option<UnseenConfig>,
     wall: GlyphConfig,
     floor: GlyphConfig,
     rock: GlyphConfig,
@@ -129,6 +133,31 @@ struct TileConfig {
 struct GlyphConfig {
     symbol: char,
     color: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnseenConfig {
+    symbol: String,
+    color: String,
+}
+
+impl UnseenConfig {
+    fn resolve(self) -> io::Result<Glyph> {
+        let mut symbols = self.symbol.chars();
+        let symbol = symbols.next().unwrap_or(' ');
+        if symbols.next().is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "tiles.unseen.symbol must be empty or one printable ASCII character",
+            ));
+        }
+        GlyphConfig {
+            symbol,
+            color: self.color,
+        }
+        .resolve("tiles.unseen")
+    }
 }
 
 fn foreground(value: &str, field: &str) -> io::Result<Style> {
@@ -190,6 +219,12 @@ impl Theme {
             muted: foreground(&config.ui.muted, "ui.muted")?,
             accent: foreground(&config.ui.accent, "ui.accent")?.add_modifier(Modifier::BOLD),
             danger: foreground(&config.ui.danger, "ui.danger")?.add_modifier(Modifier::BOLD),
+            unseen: config
+                .tiles
+                .unseen
+                .map(UnseenConfig::resolve)
+                .transpose()?
+                .unwrap_or_else(|| Glyph::new(' ')),
             wall: config.tiles.wall.resolve("tiles.wall")?,
             floor: config.tiles.floor.resolve("tiles.floor")?,
             rock: config.tiles.rock.resolve("tiles.rock")?,
@@ -247,6 +282,44 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unseen_glyph_supports_custom_empty_and_legacy_themes() {
+        use crate::{
+            game::{level::map::Map, screen::Screen},
+            tui::{LevelView, RenderView, Renderer},
+        };
+        use ratatui::{Terminal, backend::TestBackend};
+        assert_eq!(Theme::parse(CONFIG).unwrap().unseen.symbol, ' ');
+        for (symbol, expected) in [("", " "), ("?", "?")] {
+            let source =
+                format!("{CONFIG}\n[tiles.unseen]\nsymbol = '{symbol}'\ncolor = '#123456'\n");
+            let renderer = Renderer::new(Theme::parse(&source).unwrap());
+            let map = Map::new(3, 3);
+            let view = RenderView {
+                level: Some(LevelView::new(&map)),
+                ..Default::default()
+            };
+            let mut terminal = Terminal::new(TestBackend::new(20, 10)).unwrap();
+            for screen in [Screen::Playing, Screen::Paused] {
+                let frame = terminal
+                    .draw(|frame| renderer.render(frame, &screen, &view))
+                    .unwrap();
+                assert_eq!(frame.buffer[(1, 1)].symbol(), expected);
+                assert_eq!(frame.buffer[(1, 1)].fg, Color::Rgb(0x12, 0x34, 0x56));
+                assert!(
+                    !map.get(crate::game::position::Position::new(0, 0))
+                        .unwrap()
+                        .seen
+                );
+            }
+        }
+        for (symbol, color) in [("..", "red"), ("界", "red"), (".", "invalid")] {
+            let source =
+                format!("{CONFIG}\n[tiles.unseen]\nsymbol = '{symbol}'\ncolor = '{color}'\n");
+            assert!(Theme::parse(&source).is_err());
+        }
+    }
 
     #[test]
     fn entity_theme_entries_are_optional_and_validate_custom_appearances() {
@@ -368,6 +441,7 @@ color = "reset"
             theme.muted,
             theme.accent,
             theme.danger,
+            theme.unseen.style,
             theme.wall.style,
             theme.floor.style,
             theme.rock.style,

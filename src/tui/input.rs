@@ -21,7 +21,7 @@ struct Binding {
 /// Global bindings and screen-specific action mappings.
 pub struct Keybinds {
     global: Vec<Binding>,
-    screens: [Vec<Binding>; 5],
+    screens: [Vec<Binding>; 6],
 }
 
 #[derive(Deserialize)]
@@ -33,6 +33,16 @@ struct Config {
     inventory: BTreeMap<String, Vec<String>>,
     paused: BTreeMap<String, Vec<String>>,
     game_over: BTreeMap<String, Vec<String>>,
+    #[serde(default = "default_help_bindings")]
+    help: BTreeMap<String, Vec<String>>,
+}
+
+fn default_help_bindings() -> BTreeMap<String, Vec<String>> {
+    [
+        ("back".into(), vec!["esc".into()]),
+        ("confirm".into(), vec!["enter".into()]),
+    ]
+    .into()
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -52,13 +62,14 @@ impl Keybinds {
     pub fn parse(source: &str) -> io::Result<Self> {
         let config: Config = toml::from_str(source).map_err(|error| invalid(error.to_string()))?;
         let global = bindings(config.global)?;
-        let mut screens = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        let mut screens = std::array::from_fn(|_| Vec::new());
         for (index, table) in [
             config.main_menu,
             config.playing,
             config.inventory,
             config.paused,
             config.game_over,
+            config.help,
         ]
         .into_iter()
         .enumerate()
@@ -108,6 +119,30 @@ impl Keybinds {
             .collect::<Vec<_>>()
             .join("  ")
     }
+
+    /// Builds the controls overlay from actual screen bindings, including remaps.
+    pub fn controls(&self, screen: &Screen) -> String {
+        let title = match screen {
+            Screen::MainMenu => "MAIN MENU",
+            Screen::Playing => "PLAYING",
+            Screen::Inventory => "INVENTORY",
+            Screen::Paused => "PAUSED",
+            Screen::GameOver => "GAME OVER",
+            Screen::Help => "HELP",
+        };
+        let controls = self.screens[screen_index(screen)]
+            .iter()
+            .chain(&self.global)
+            .map(|binding| binding.hint.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let closing = self.screens[screen_index(&Screen::Help)]
+            .iter()
+            .map(|binding| binding.hint.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("{title} CONTROLS\n\n{controls}\n\nClose help\n{closing}")
+    }
 }
 
 fn screen_index(screen: &Screen) -> usize {
@@ -117,6 +152,7 @@ fn screen_index(screen: &Screen) -> usize {
         Screen::Inventory => 2,
         Screen::Paused => 3,
         Screen::GameOver => 4,
+        Screen::Help => 5,
     }
 }
 
@@ -130,6 +166,18 @@ fn bindings(table: BTreeMap<String, Vec<String>>) -> io::Result<Vec<Binding>> {
                 "move_left" => (Action::MoveLeft, "left"),
                 "move_right" => (Action::MoveRight, "right"),
                 "wait" => (Action::Wait, "wait"),
+                "descend" => (Action::Descend, "descend"),
+                "help" => (Action::Help, "help"),
+                "inventory" => (Action::OpenInventory, "inventory"),
+                "pickup" => (Action::Pickup, "pick up"),
+                "use_item" => (Action::UseItem, "use"),
+                "equip_item" => (Action::EquipItem, "equip"),
+                "unequip_item" => (Action::UnequipItem, "unequip"),
+                "drop_item" => (Action::DropItem, "drop"),
+                "history_up" => (Action::HistoryUp, "older"),
+                "history_down" => (Action::HistoryDown, "newer"),
+                "history_page_up" => (Action::HistoryPageUp, "older page"),
+                "history_page_down" => (Action::HistoryPageDown, "newer page"),
                 "pause" => (Action::Pause, "pause/resume"),
                 "confirm" => (Action::Confirm, "confirm"),
                 "back" => (Action::Back, "back"),
@@ -171,7 +219,7 @@ fn key_chord(code: KeyCode, modifiers: KeyModifiers) -> Key {
     match code {
         KeyCode::Tab if modifiers.contains(KeyModifiers::SHIFT) => (KeyCode::BackTab, modifiers),
         KeyCode::BackTab => (code, modifiers | KeyModifiers::SHIFT),
-        KeyCode::Char('>') => (code, modifiers - KeyModifiers::SHIFT),
+        KeyCode::Char('>' | '?') => (code, modifiers - KeyModifiers::SHIFT),
         _ => (code, modifiers),
     }
 }
@@ -226,6 +274,79 @@ fn parse_key(label: &str) -> io::Result<Key> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_opens_with_shifted_or_unshifted_question_mark_and_uses_remapped_controls() {
+        let source =
+            include_str!("../../config/keybinds.toml").replace("wait = [\".\"]", "wait = [\"x\"]");
+        let bindings = Keybinds::parse(&source).unwrap();
+        for screen in [
+            Screen::MainMenu,
+            Screen::Playing,
+            Screen::Inventory,
+            Screen::Paused,
+            Screen::GameOver,
+            Screen::Help,
+        ] {
+            for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+                assert_eq!(
+                    bindings.action(&screen, KeyEvent::new(KeyCode::Char('?'), modifiers)),
+                    Some(&Action::Help)
+                );
+            }
+        }
+        assert_eq!(
+            bindings.action(
+                &Screen::Help,
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+            ),
+            Some(&Action::Back)
+        );
+        let controls = bindings.controls(&Screen::Inventory);
+        assert!(controls.contains("INVENTORY CONTROLS"));
+        assert!(controls.contains("x: wait"));
+        assert!(!controls.contains(".: wait"));
+        assert!(controls.contains("Close help\nesc: back\nenter: confirm"));
+    }
+
+    #[test]
+    fn inventory_and_history_controls_are_scoped_and_match_help() {
+        let bindings = Keybinds::parse(include_str!("../../config/keybinds.toml")).unwrap();
+        for (screen, key, expected) in [
+            (Screen::Playing, KeyCode::Char('i'), Action::OpenInventory),
+            (Screen::Playing, KeyCode::Char('g'), Action::Pickup),
+            (Screen::Playing, KeyCode::Char('.'), Action::Wait),
+            (Screen::Inventory, KeyCode::Char('.'), Action::Wait),
+            (Screen::Playing, KeyCode::Char('>'), Action::Descend),
+            (Screen::Inventory, KeyCode::Char('e'), Action::EquipItem),
+            (Screen::Inventory, KeyCode::Char('r'), Action::UnequipItem),
+            (Screen::Inventory, KeyCode::Char('u'), Action::UseItem),
+            (Screen::Inventory, KeyCode::Char('d'), Action::DropItem),
+            (Screen::Inventory, KeyCode::Esc, Action::Back),
+            (Screen::GameOver, KeyCode::Up, Action::HistoryUp),
+            (Screen::GameOver, KeyCode::Down, Action::HistoryDown),
+            (Screen::GameOver, KeyCode::PageUp, Action::HistoryPageUp),
+            (Screen::GameOver, KeyCode::PageDown, Action::HistoryPageDown),
+        ] {
+            assert_eq!(
+                bindings.action(&screen, KeyEvent::new(key, KeyModifiers::NONE)),
+                Some(&expected)
+            );
+        }
+        assert!(bindings.help(&Screen::Inventory).contains("u: use"));
+        assert!(
+            bindings
+                .help(&Screen::GameOver)
+                .contains("pageup: older page")
+        );
+        assert_eq!(
+            bindings.action(
+                &Screen::Playing,
+                KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)
+            ),
+            None
+        );
+    }
     const CONFIG: &str = include_str!("../../config/keybinds.toml");
 
     #[test]
@@ -301,7 +422,7 @@ mod tests {
 
     #[test]
     fn greater_than_matches_with_or_without_shift_and_detects_alias_conflicts() {
-        let source = CONFIG.replace("pause = [\"esc\"]", "pause = [\">\"]");
+        let source = CONFIG.to_owned();
         let bindings = Keybinds::parse(&source).unwrap();
         for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
             assert!(matches!(
@@ -309,7 +430,7 @@ mod tests {
                     &Screen::Playing,
                     KeyEvent::new(KeyCode::Char('>'), modifiers)
                 ),
-                Some(Action::Pause)
+                Some(Action::Descend)
             ));
         }
         assert!(Keybinds::parse(&source.replace("[\">\"]", "[\">\", \"shift+>\"]")).is_err());

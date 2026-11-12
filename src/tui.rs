@@ -111,11 +111,15 @@ pub struct RenderView<'a> {
     pub outcome: Option<&'a str>,
     /// Optional final dungeon depth.
     pub final_depth: Option<u32>,
-    /// Caller-supplied help reflecting actual configured controls.
+    /// Number of history lines scrolled back from the newest game-over message.
+    pub history_offset: usize,
+    /// Screen underneath the help overlay, preserving its display selection.
+    pub help_origin: Option<Screen>,
+    /// Controls overlay text generated from configured bindings.
     pub help: &'a str,
 }
 
-/// Renders the five game screens using a shared, customizable theme (contract 20).
+/// Renders game screens and overlays using a shared theme (contract 20).
 #[derive(Default)]
 pub struct Renderer {
     theme: Theme,
@@ -155,15 +159,23 @@ impl Renderer {
             Block::default().style(ratatui::style::Style::reset()),
             frame.area(),
         );
-        match screen {
+        let background = if matches!(screen, Screen::Help) {
+            view.help_origin.as_ref().unwrap_or(&Screen::Playing)
+        } else {
+            screen
+        };
+        match background {
             Screen::MainMenu => screens::main_menu::draw(frame, view, &self.theme),
-            Screen::Playing => screens::playing::draw(frame, view, &self.theme),
+            Screen::Playing | Screen::Help => screens::playing::draw(frame, view, &self.theme),
             Screen::Inventory => screens::inventory::draw(frame, view, &self.theme),
             Screen::Paused => {
                 screens::playing::draw(frame, view, &self.theme);
                 screens::paused::draw(frame, &self.theme);
             }
             Screen::GameOver => screens::game_over::draw(frame, view, &self.theme),
+        }
+        if matches!(screen, Screen::Help) {
+            screens::paused::draw_overlay(frame, &self.theme, " Help ", view.help);
         }
     }
 }
@@ -173,6 +185,37 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     use super::*;
+
+    #[test]
+    fn controls_only_appear_in_help_using_the_pause_overlay_style() {
+        let view = RenderView {
+            help: "CONTROLS\nx: wait",
+            help_origin: Some(Screen::Playing),
+            ..Default::default()
+        };
+        for screen in [
+            Screen::Playing,
+            Screen::Inventory,
+            Screen::GameOver,
+            Screen::MainMenu,
+            Screen::Paused,
+        ] {
+            assert!(!text(&draw_screen(80, 24, screen, &view)).contains("x: wait"));
+        }
+        let help = draw_screen(80, 24, Screen::Help, &view);
+        let pause = draw_screen(80, 24, Screen::Paused, &view);
+        assert!(text(&help).contains("x: wait"));
+        // Both notices have two lines here, so only text inside the shared
+        // centered 40x5 panel may differ from the pause frame.
+        for y in 0..24 {
+            for x in 0..80 {
+                if !(20..60).contains(&x) || !(9..14).contains(&y) {
+                    assert_eq!(help[(x, y)], pause[(x, y)]);
+                }
+            }
+        }
+        assert_eq!(help[(20, 9)].fg, pause[(20, 9)].fg);
+    }
 
     #[test]
     fn generated_populations_reach_the_renderer_with_custom_glyphs_and_visibility() {
@@ -273,6 +316,7 @@ mod tests {
                 Screen::Paused,
                 Screen::Inventory,
                 Screen::GameOver,
+                Screen::Help,
             ] {
                 draw_screen(width, height, screen, &view);
             }

@@ -6,147 +6,70 @@
 </style></head><body><main>
 
 <header><div class="eyebrow">Paydirt · Development plan</div>
-<h1>What’s left to build</h1>
-<p class="lede">Tasks grouped by branch, with the order they need to happen.</p>
-<p class="meta">Original baseline: develop at c1fe551 · Updated for merged level-entities and player-movement · November 11, 2026</p></header>
-<section id="baseline"><h2>Where things stand</h2>
-<p>The map generator, screens, settings, stats, inventory storage, equipment slots, and basic enemy types exist. Level entity storage, depth-based populations, line of sight, exploration memory, and themed population rendering are implemented on feature/level-entities.</p>
-<p>Game owns an active Player and MessageLog. Movement, waiting, bump-to-open doors, enemy collision checks, movement-driven visibility, and player rendering are implemented. AI, combat, inventory controls, floor changes, and death handling remain unfinished. Actions report spent turns; the shared enemy/effect turn loop is not yet implemented.</p>
-<p>These are suggested branches. Build on the existing work. Some gameplay rules below still need a team decision.</p></section>
-<section id="order"><h2>Work order</h2>
-<div class="flow">1. Start player-movement and level-entities together.<br>
-2. Then work on enemy-ai, inventory-gameplay, and floor changes in parallel.<br>
-3. Connect combat-turns after movement, entities, and AI are ready.<br>
-4. Finish death handling after combat.<br>
-5. Test everything together in integration/gameplay.</div>
-<p>You can plan rules and build small pieces early. Finish each branch only after the parts it depends on are working together.</p>
-<div class="schedule"><table><thead><tr><th>Branch</th><th>Dependencies</th><th>Concurrencies</th></tr></thead><tbody>
-<tr><td><a href="#player-movement">player-movement</a></td><td>Nothing to start. Enemy collision checks need level-entities.</td><td>level-entities</td></tr>
-<tr><td><a href="#level-entities">level-entities</a></td><td>Nothing to start. Agree placement rules with movement.</td><td>player-movement</td></tr>
-<tr><td><a href="#enemy-ai">enemy-ai</a></td><td>Player position, enemy storage, and collision checks</td><td>Inventory and floor changes</td></tr>
-<tr><td><a href="#combat-turns">combat-turns</a></td><td>Movement, entities, and AI. Equipment effects must be agreed before final combat checks.</td><td>Inventory work</td></tr>
-<tr><td><a href="#inventory-gameplay">inventory-gameplay</a></td><td>Player ownership for controls; floor items for pickup/drop</td><td>AI, combat, and floor changes</td></tr>
-<tr><td><a href="#progression-gameover">progression-gameover</a></td><td>Movement for stairs; combat for death; inventory for checking saved player state</td><td>Start floor changes while AI and inventory are built.</td></tr>
-<tr><td><a href="#integration-gameplay">integration/gameplay</a></td><td>Merge and check work throughout. All feature branches must be done for the final check.</td><td>Documentation and test planning</td></tr>
-</tbody></table></div>
-<h3>Shared rules</h3>
-<ul><li>Every gameplay action uses one turn: moving once, attacking once, waiting, picking up or dropping an item, equipping or unequipping, opening a door, and using an item. Failed attempts also use a turn. Screen redraws and menu navigation are not gameplay actions.</li>
-<li>Level tracks a stable ID for each enemy. Game uses that ID to read its position, health, and state. AI chooses a move; Game checks it and updates the position. Dead enemies are removed from Level and cannot act or appear again.</li>
+<h1>Completed work and remaining tasks</h1>
+<p class="lede">The core gameplay systems are integrated. Remaining work focuses on content decisions, playtesting, final validation, and documentation.</p>
+<p class="meta">Reviewed against feature/combat-turns at 0bf82de · November 11, 2026</p>
+<nav aria-label="Development plan sections"><a href="#remaining">Remaining work</a> · <a href="#completed">Completed work</a> · <a href="#rules">Implemented rules</a> · <a href="#validation">Validation baseline</a></nav></header>
 
-<li>Stairs require the player to press &gt; while standing on them. Stepping onto stairs does not descend. A dead player cannot interact with stairs.</li></ul>
-<p>Several branches change Game, Player, actions, keybindings, and display data. Keep those edits small and merge often. Combat owns the turn loop; other branches report what the player did.</p></section>
-<section id="undecided">
-<h2>Undecided</h2>
-<ul><li>Inventory and combat: how do weapons, armor, and consumables affect stats?</li>
-<li>Item catalog: which items, armor, and weapons will be added to the game?</li></ul>
-</section>
-<section id="player-movement">
-<h2 class="branch">feature/player-movement</h2>
-<p class="lede">Put the player in the game and let them move.</p>
-<p><strong>Status:</strong> Implemented and integrated with level-entities. Enemies block movement until combat is implemented. Bumping a closed door opens it without moving; entering takes another action. Movement and door opening refresh visibility. Moves and waits report spent turns, including failed attempts; the shared turn loop remains combat-turns work.</p>
+<section id="remaining"><h2>Remaining work</h2>
+<p>Work from the integrated code on the current branch. The earlier movement → entities → AI → combat → inventory → progression implementation sequence is complete here. Final review and merge approval remain part of the project’s SCM process.</p>
+<ol>
+<li>Agree on the remaining item content, then implement the approved catalog.</li>
+<li>Playtest the current game and any content changes; adjust balance using recorded results.</li>
+<li>Finish session-level validation and document the results.</li>
+<li>Reconcile the design documents and complete the review and baseline audit.</li>
+</ol>
+<h3>Content and balance</h3>
 <ul class="tasks">
-<li class="done"><h3>Start a game <span class="contract">(SDD Contract 1)</span></h3><p>Store the active Player and MessageLog in Game. On New Game, generate a floor, create starting stats, inventory, and equipment, and set the player position to the floor’s start. Clear the previous session’s messages and selections.</p></li>
-<li class="done"><h3>Add controls <span class="contract">(SDD Contract 21)</span></h3><p>Add left, right, and wait to Action and the input action-name mapping. Add their playing keybindings. Build help text from those bindings.</p></li>
-<li class="done"><h3>Move safely <span class="contract">(SDD Contracts 2, 7, 9, 10)</span></h3><p>Game calculates the target tile from the player position and direction. If the tile is outside the map or blocked by terrain, leave the position unchanged. Ask Level whether an enemy occupies the target. Occupied targets currently block movement; combat dispatch remains combat-turns work. Otherwise update Player’s position.</p></li>
-<li class="done"><h3>Open doors <span class="contract">(SDD Contracts 2, 8, 9)</span></h3><p>Level provides an operation that changes a closed door to an open door. Game calls it when the player bumps the door and refreshes visibility. Opening reports one spent turn and leaves the player in place; entering takes another action.</p></li>
-<li class="done"><h3>Show the player <span class="contract">(SDD Contracts 6, 20)</span></h3><p>Read position and health from Player and pass them to the existing display views. Center the map view on that position. Pass MessageLog entries to the message panel.</p></li>
-<li class="done"><h3>Report spent turns <span class="contract">(SDD Contract 2)</span></h3><p>Return an action result that tells the shared turn loop to advance once for a move, wait, or door action, even if it fails. Pause, menu navigation, and redraws do not advance the turn.</p></li>
-</ul><div class="gate"><h3>Done when</h3><ul>
-<li>A new player appears at the start and moves in all four directions.</li>
-<li>Walls, map edges, closed doors, and enemies are handled correctly.</li>
-<li>Pause keeps the player and floor unchanged.</li>
-</ul></div></section>
-<section id="level-entities">
-<h2 class="branch">feature/level-entities</h2>
-<p class="lede">Put enemies and items on each floor.</p>
-<p><strong>Status:</strong> Implemented and covered by automated checks. Player collision and movement-driven visibility updates are integrated through player-movement; AI, combat, and inventory controls remain separate features.</p>
+<li><h3>Agree on the final item catalog <span class="contract">(SDD Contract 18)</span></h3><p>Decide which additional weapons, armor, and consumables belong in this increment, including unlock levels, damage dice, defense, healing, and any on-hit effects. The current catalog contains Pickaxe, Leather Armor, and Health Potion. Record whether additional consumable behaviors are required; the existing potion behavior is already implemented.</p></li>
+<li><h3>Implement the approved item content <span class="contract">(SDD Contracts 7, 18, 19)</span></h3><p>After the content decision, update the catalog in <code>src/game/item.rs</code> and resolve its placeholder-item TODO. Preserve existing catalog indices and owned item data during transfers. Add behavior only for approved effects that the current damage, defense, healing, and weapon-effect support cannot express. Verify unlock levels, generated items, equipment drops, and use/equip behavior for the additions.</p></li>
+<li><h3>Playtest and tune balance</h3><p>Record results across early and deeper floors: survival, enemy detection and fleeing, damage, healing availability, item capacity, population density, and the 5% equipment-drop rate. Adjust values where the results justify changes and update the documented tuning. The current numbers are implemented defaults awaiting playtesting.</p></li>
+</ul>
+<h3>Final gameplay validation <span class="contract">(SDD Contracts 1–21)</span></h3>
 <ul class="tasks">
-<li class="done"><h3>Store enemies and floor items <span class="contract">(SDD Contracts 10, 11)</span></h3><p>Implemented: Level owns enemies keyed by stable floor-local EnemyId and ground items as owned Item/Position entries. Position remains in Enemy; IDs are never reused within a floor.</p></li>
-<li class="done"><h3>Add collection operations <span class="contract">(SDD Contracts 10, 11, 13)</span></h3><p>Implemented: borrowed iteration, ID and tile lookup, validated insertion/movement, and ownership-preserving removal. Unknown IDs return missing results without changing storage. Ground items support tile lookup and selected-entry removal; indices shift after removal, and runtime items may share tiles.</p></li>
-<li class="done"><h3>Check occupied tiles <span class="contract">(SDD Contracts 9, 10)</span></h3><p>Implemented: terrain walkability is separate from occupancy. Level rejects out-of-bounds, blocked, or enemy-occupied targets; staying on the current tile succeeds. Game remains responsible for checking the active player before applying an enemy move.</p></li>
-<li class="done"><h3>Spawn real enemies and items <span class="contract">(SDD Contracts 10, 11, 18, 19)</span></h3><p>Implemented: generation stores enemies and catalog items on distinct ordinary floor tiles, excluding stairs, obstacles, and the entire starting room. Species unlock at zero-based depths 0 (Slime), 2 (Ghost), and 4 (Goblin); depth-dependent weights increasingly favor stronger species.</p></li>
-<li class="done"><h3>Handle limits <span class="contract">(SDD Contract 19)</span></h3><p>Implemented: bounded counts consume shuffled spawn candidates without replacement, reserving item space on cramped floors. Every random choice uses the supplied RNG. Catalog level one is available at depth zero using saturating depth + 1. Tests cover reproducibility, empty/exhausted candidates, species minimum depths, placement restrictions, maximum depth, and increasing average difficulty.</p></li>
-<li class="done"><h3>Draw the population <span class="contract">(SDD Contracts 12, 20)</span></h3><p>Visibility backend implemented: Tile owns seen and visible flags; Level.update_visibility(player_position) refreshes sight while retaining exploration memory. New Game initializes sight from the start. Rendering implemented: Renderer builds themed display entries from visible_enemies() and visible_ground_items(). Unseen terrain is blank, seen terrain stays drawn, and entities require current tile visibility. Optional species/category theme entries default for older configurations. Drawing order is terrain, items, enemies, then the player when supplied; the launcher supplies the active player position for drawing and camera focus.</p></li>
-</ul><div class="gate"><h3>Done when</h3><ul>
-<li>Generated floors contain valid enemies and items.</li>
-<li>Initial enemy spawns do not overlap each other, items, the starting room, or stairs; runtime movement uses separate rules.</li>
-<li>Enemy IDs stay stable after other enemies are removed. Lookup, movement, and removal affect only the intended enemy.</li>
-</ul></div></section>
-<section id="enemy-ai">
-<h2 class="branch">feature/enemy-ai</h2>
-<p class="lede">Make enemies react to the player. Use the states defined in Enemy: Idle, Attacking, and Fleeing.</p>
-<p><strong>When:</strong> Plan now. Connect behavior after player-movement and level-entities provide player position, enemy storage, and collision checks. Work alongside inventory and floor changes.</p>
+<li><h3>Exercise a complete session</h3><p>Existing controller tests cover individual interactions and turn timing. Review that coverage and add a deterministic session scenario for gaps across start, movement, door opening, combat, pickup, equipment, potion use, pause/help, descent, death, history scrolling, and restart. Assert player state, item ownership, depth, and screen at the transitions. Reuse existing tests for already-covered rejection and effect cases.</p></li>
+<li><h3>Run and record a keyboard playthrough</h3><p>Play through the same session flow in a real terminal. Check small and resized windows, custom themes, remapped controls, help from every screen, and game-over history. Rendering and binding tests already cover these areas automatically; record the manual results and file issues for defects.</p></li>
+<li><h3>Verify terminal cleanup and launch errors</h3><p>Configuration validation before raw mode and terminal restoration are implemented. Verify normal quit, invalid configuration, and an application error exit in a real terminal; confirm that echo, cursor, and screen state recover. Record results and fix any failures.</p></li>
+</ul>
+<h3>Documentation and review</h3>
 <ul class="tasks">
-<li><h3>Define each enemy’s behavior <span class="contract">(SDD Contract 13)</span></h3><p>Define detection range, attack range, and flee-health threshold for each species. Use player distance and enemy health to select a state. Specify when idle and fleeing states end. Updating status alone must not make a distant enemy attack.</p></li>
-<li><h3>Choose a legal move <span class="contract">(SDD Contracts 9, 13)</span></h3><p>AI selects a target tile toward or away from the player. Game checks terrain, enemy occupancy, and player position before asking Level to update the enemy by ID. If no move is valid, the enemy waits. Decide whether enemies can open doors.</p></li>
-<li><h3>Request attacks <span class="contract">(SDD Contracts 2, 13, 14)</span></h3><p>AI returns a wait, move, or attack decision for an enemy ID. A move includes its target tile. Game applies movement through Level and passes attacks to combat. AI does not apply player damage or advance turns.</p></li>
-<li><h3>React to damage <span class="contract">(SDD Contracts 10, 13)</span></h3><p>After health changes, update the enemy state using its species threshold. If health reaches zero, Game removes the enemy by ID before it acts again. Document or revise the current damage method, which uses negative values to reduce health.</p></li>
-</ul><div class="gate"><h3>Done when</h3><ul>
-<li>Enemies notice, approach, attack, and flee under the agreed rules.</li>
-<li>Blocked paths and nearby enemies do not cause illegal moves.</li>
-<li>Game controls when decisions happen and how damage is applied.</li>
+<li><h3>Reconcile the SDD with the implementation</h3><p>Update the older contracts and ownership descriptions using the README’s integration notes: caller-supplied RNG, stable floor-local enemy IDs, owned ground items, seen/visible tiles, borrowed render views, shared turn order, inventory attempts, full history, and stair-transition timing. Use the document owner’s Teams review process and update the version and Change Summary.</p></li>
+<li><h3>Refresh developer documentation after final changes</h3><p>Keep README controls, catalog details, balance values, and this task list aligned with the final game. Review public API comments for missing or stale descriptions, including references to gameplay that is now implemented. Explicitly list content deferred beyond this increment.</p></li>
+<li><h3>Complete final checks and review</h3><p>Run <code>cargo fmt --check</code>, <code>cargo test --offline</code>, and <code>cargo clippy --offline --all-targets -- -D warnings</code> after the final changes. Link the change issue in the pull request, include validation results, and complete the SCM review checklist. Passing the current checks does not complete the later release review.</p></li>
+<li><h3>Complete the baseline audit</h3><p>Have the Quality and Test Managers check the required configuration items, reviewed changes, test results, document versions, and planned increment scope. Record the audit and demonstration results. The Support Manager merges approved work and creates the baseline tag according to the SCM plan.</p></li>
+</ul>
+<div class="gate"><h3>Ready for the baseline when</h3><ul>
+<li>The item-content decision is recorded and agreed scope is implemented.</li>
+<li>A complete keyboard session and terminal cleanup checks have recorded results.</li>
+<li>Relevant automated checks pass after the final changes.</li>
+<li>Documents match the game, reviews are complete, and the audit is recorded.</li>
 </ul></div></section>
-<section id="combat-turns">
-<h2 class="branch">feature/combat-turns</h2>
-<p class="lede">Resolve attacks and advance the game one turn at a time.</p>
-<p><strong>When:</strong> Plan damage rules and turn order now. Connect the full loop after movement, entities, and AI. Agree equipment effects with inventory-gameplay before final checks.</p>
+
+<section id="completed"><h2>Completed work</h2>
+<p>These capabilities are implemented together on <code>feature/combat-turns</code> and have automated coverage. Completion here describes code behavior; manual acceptance and release review are tracked above.</p>
 <ul class="tasks">
-<li><h3>Set damage rules <span class="contract">(SDD Contracts 2, 14)</span></h3><p>Define damage from attacker attack, defender defense, and equipment effects once those effects are decided. Specify minimum damage and any randomness. Decide whether a player move into an enemy becomes an attack. Current enemy attack values are fixed.</p></li>
-<li><h3>Apply attacks <span class="contract">(SDD Contracts 2, 7, 10, 13, 14)</span></h3><p>Game selects the defender by enemy ID or the active Player. Apply the calculated health change through the existing stats methods. Update surviving enemies’ states; remove dead enemies through Level. Append attack and damage results to MessageLog.</p></li>
-<li><h3>Run one turn loop <span class="contract">(SDD Contract 2)</span></h3><p>Game processes one gameplay action, then runs enemy decisions and status-effect updates once in the agreed order. Menu navigation, pause, and redraws skip this loop. Item actions call this same loop instead of running a second one.</p></li>
-<li><h3>Handle failed actions <span class="contract">(SDD Contract 2)</span></h3><p>Return a spent-turn result for blocked movement, failed pickup, full-inventory rejection, and failed item use. Leave rejected changes unapplied, then run the normal turn updates once.</p></li>
-<li><h3>Use effects and equipment <span class="contract">(SDD Contracts 2, 7)</span></h3><p>Call the existing status-effect tick once per turn. Calculate effective attack and defense from base stats plus equipped item effects. Reading stats or drawing a frame must not change base values or add bonuses again.</p></li>
-<li><h3>Stop on death <span class="contract">(SDD Contracts 2, 5, 10)</span></h3><p>After each damage or effect update, check the player’s health. At zero health, stop remaining enemy actions and end the session through progression-gameover. Skip enemy IDs that Level no longer contains.</p></li>
-</ul><div class="gate"><h3>Done when</h3><ul>
-<li>Attacks, defense, equipment, and lethal damage work together.</li>
-<li>Every spent turn advances enemies and effects exactly once.</li>
-<li>Menus and redraws spend no turns; dead actors do not act.</li>
-</ul></div></section>
-<section id="inventory-gameplay">
-<h2 class="branch">feature/inventory-gameplay</h2>
-<p class="lede">Let the player pick up, manage, equip, and use items.</p>
-<p><strong>When:</strong> Start item rules now. Controls need Game to own a Player. Pickup/drop needs level-entities. Work alongside AI and combat, using the shared one-action, one-turn rule.</p>
-<ul class="tasks">
-<li><h3>Make carried items selectable <span class="contract">(SDD Contract 17)</span></h3><p>Add borrowed access to Inventory’s items for display and selection. Track a selected carried entry separately from its catalog index so duplicate copies stay distinct. After removal, clamp the selection to the remaining entries; handle an empty list.</p></li>
-<li><h3>Add inventory controls <span class="contract">(SDD Contracts 3, 17, 20, 21)</span></h3><p>Add open, select, use, equip, unequip, drop, and back actions with screen-specific bindings. Game stores the inventory selection and changes screens. Build inventory display rows from carried items and equipment slots.</p></li>
-<li><h3>Pick up and drop <span class="contract">(SDD Contracts 11, 15, 16)</span></h3><p>For pickup, check the category limit before transferring the selected ground Item from Level to Inventory. On rejection, keep it on the floor. For drop, transfer the selected carried Item to Level at the player position. Transfer the existing object rather than recreating it from its catalog index.</p></li>
-<li><h3>Equip and unequip <span class="contract">(SDD Contracts 7, 15, 16)</span></h3><p>Add Player operations that transfer a selected carried item into its equipment slot and return the displaced item to Inventory. Unequip transfers an item back to Inventory. Check capacity before changes; on failure, preserve both inventory and equipment.</p></li>
-<li><h3>Define item effects <span class="contract">(SDD Contract 18)</span></h3><p>After the Undecided choices are settled, add the chosen catalog entries, spawn levels, and effect data to Item. Use that data for equipment modifiers and consumable effects. Define a clear result for invalid catalog lookup.</p></li>
-<li><h3>Use items and show results <span class="contract">(SDD Contracts 2, 7, 16, 20)</span></h3><p>Apply the selected consumable’s effect and remove exactly one copy according to the agreed use rules, including use at full health. Rebuild inventory/status display data and append a result message. Pickup, drop, equip, unequip, and use each advance one turn, even on failure.</p></li>
-</ul><div class="gate"><h3>Done when</h3><ul>
-<li>Pickup, drop, swap, unequip, and use preserve every item correctly.</li>
-<li>Full categories and duplicate copies behave correctly.</li>
-<li>Equipment and consumables affect gameplay, and controls match the help.</li>
-</ul></div></section>
-<section id="progression-gameover">
-<h2 class="branch">feature/progression-gameover</h2>
-<p class="lede">Move between floors and finish a session.</p>
-<p><strong>When:</strong> Start stairs after player-movement. Finish populated floors after level-entities, death handling after combat, and state-preservation checks after inventory.</p>
-<ul class="tasks">
-<li><h3>Use stairs <span class="contract">(SDD Contracts 2, 4, 21)</span></h3><p>Map &gt; to a descend action. Game checks that the player is alive and their position equals Level’s stairs position before descending. Moving onto stairs does not descend. The action spends one turn; define which floor’s enemy/effect updates run during it.</p></li>
-<li><h3>Generate the next floor <span class="contract">(SDD Contracts 4, 7, 19)</span></h3><p>Generate a Level at the next depth using Game’s RNG, replace the old Level, and set the existing Player’s position to the new start. Keep the player’s stats, effects, inventory, and equipment. Check depth overflow before incrementing.</p></li>
-<li><h3>Show game over <span class="contract">(SDD Contracts 5, 20)</span></h3><p>When combat or a status effect reduces player health to zero, store final depth and the chosen result details in session-summary state. Set Screen to GameOver and reject gameplay actions. Pass the stored summary to the game-over view.</p></li>
-<li><h3>Return and restart <span class="contract">(SDD Contracts 1, 3, 5)</span></h3><p>On return to menu, clear active session state. On New Game, create a new player, floor, log, and selections, and clear the old summary. Route quit through the launcher’s existing terminal cleanup.</p></li>
-<li><h3>Keep stair use separate from movement <span class="contract">(SDD Contracts 2, 4, 5)</span></h3><p>Only the descend action can replace the floor. Reject it for a dead player. Remove the old floor’s pending enemy actions when replacing Level. Death on a stairs tile follows normal death handling. Add a win condition only if required.</p></li>
-</ul><div class="gate"><h3>Done when</h3><ul>
-<li>Descent keeps player health, effects, inventory, and equipment.</li>
-<li>Attack and effect deaths both show correct results.</li>
-<li>Restart creates a fresh session without leftover state.</li>
-</ul></div></section>
-<section id="integration-gameplay">
-<h2 class="branch">integration/gameplay</h2>
-<p class="lede">Merge the features and check a complete game.</p>
-<p><strong>When:</strong> Merge and check changes throughout development. Final checks need all six feature topics.</p>
-<ul class="tasks">
-<li><h3>Merge in order</h3><p>Merge movement and entity storage first, then AI and inventory. Add the shared combat loop, then complete death handling. Update each dependent branch after its required branches merge.</p></li>
-<li><h3>Check every screen <span class="contract">(SDD Contracts 20, 21)</span></h3><p>Test display data for player/enemy/item positions, health, equipment, inventory, messages, and results. Check small/resized terminals, theme changes, and remapped controls. Decide whether full message history needs a separate view.</p></li>
-<li><h3>Play a full session <span class="contract">(SDD Contracts 1–21)</span></h3><p>Add integration checks that send actions through Game: start, move, open a door, attack, pick up, equip, use, pause, descend, die, and restart. Assert positions, health, item ownership, depth, and screen after each step. Include rejected actions and effect damage.</p></li>
-<li><h3>Check timing and cleanup <span class="contract">(SDD Contracts 2, 21)</span></h3><p>Check that each gameplay action advances one turn and redraws/menu navigation advance none. Check configuration errors before terminal setup and terminal restoration after normal and error exits.</p></li>
-<li><h3>Update the documents</h3><p>Update SDD descriptions when implemented behavior or interfaces differ. Follow the SCM plan’s documented issue, review, baseline versioning, recovery, and audit procedures. List any remaining unfinished features.</p></li>
-<li><h3>Run final checks</h3><p>Run relevant tests, formatting checks, and Clippy. Fix failures, stale TODOs, and missing public documentation. Follow the project’s pull-request rules.</p></li>
-</ul><div class="gate"><h3>Done when</h3><ul>
-<li>A complete session works through normal keyboard input.</li>
-<li>All features work together without lost items or extra turns.</li>
-<li>Tests and project checks pass, and documents match the game.</li>
-</ul></div></section>
-<footer class="meta">References: develop at c1fe551, the SDD, Coding_Standards.pdf, and the SCM plan template.</footer></main></body></html>
+<li class="done" id="player-movement"><h3>Player sessions, movement, and doors <span class="contract">(SDD Contracts 1–3, 6–9, 21)</span></h3><p>New Game creates the player, floor, starting equipment, and log. Cardinal movement checks terrain and occupancy; bumping a closed door opens it without moving, and bumping an enemy attacks without moving. Movement and door opening refresh sight. Pause and return-to-menu navigation are integrated.</p></li>
+<li class="done" id="level-entities"><h3>Generated floors, entities, and visibility <span class="contract">(SDD Contracts 8–12, 18–20)</span></h3><p>Connected floors contain rooms, corridors, doors, rocks, water, and stairs. Depth-based populations exclude the entire starting room and use distinct initial spawn tiles. Level owns stable enemy IDs and original ground items. Terrain walkability and actor occupancy are separate. Line of sight, persistent exploration memory, and themed rendering hide entities outside current sight. Seeded tests cover generation, placement, connectivity, and depth limits.</p></li>
+<li class="done" id="enemy-ai"><h3>Enemy detection, movement, and attacks <span class="contract">(SDD Contracts 9, 10, 13, 14)</span></h3><p>Slimes, Ghosts, and Goblins use species detection ranges with terrain line of sight. Detected enemies approach or flee based on health; blocked paths wait or try another improving cardinal step. Attacks require cardinal adjacency. Game revalidates intents and schedules one decision per surviving enemy.</p></li>
+<li class="done" id="combat-turns"><h3>Dice combat, effects, drops, and turn scheduling <span class="contract">(SDD Contracts 2, 7, 10, 13, 14)</span></h3><p>Player and enemy attacks roll damage dice, apply defense with minimum one damage, and log actual HP lost. New games equip a 2d4 Pickaxe. Weapon-effect support creates independent durations; effects tick and expire through the shared turn boundary. Direct and effect kills share immediate removal and once-only equipment drops. Player death stops processing and stores the cause and final depth.</p></li>
+<li class="done" id="inventory-gameplay"><h3>Inventory, equipment, and potion use <span class="contract">(SDD Contracts 7, 11, 15–18, 20, 21)</span></h3><p>Carried copies and equipped slots are selectable. Pickup, drop, swap, unequip, and use preserve original item data and enforce category capacity. Armor affects effective defense. Health Potions restore up to 12 HP, remain carried at full health, and consume one selected copy on successful healing. Attempts reuse the combat turn boundary, including failures and death while inventory is open.</p></li>
+<li class="done" id="progression-gameover"><h3>Descent, game-over history, and restart <span class="contract">(SDD Contracts 1, 4, 5, 7, 19–21)</span></h3><p>Explicit stair use checks position and depth overflow, ticks player effects before replacement, and preserves surviving player health, effects, equipment, and inventory. Lethal transition effects retain the old floor and final depth. GameOver scrolls the full multiline history; short terminals prioritize messages. Returning to menu and restarting clear session state.</p></li>
+<li class="done"><h3>Configurable presentation and controls <span class="contract">(SDD Contracts 20, 21)</span></h3><p>The launcher loads theme and keybindings before terminal setup using project-relative paths. Rendering consumes borrowed views without mutating gameplay. The ? controls overlay shows the underlying screen’s configured bindings and restores its selections and history position without spending turns. Automated checks cover custom glyphs, visibility, remapped keys, and small/resized layouts.</p></li>
+</ul></section>
+
+<section id="rules"><h2>Implemented rules to preserve</h2>
+<ul>
+<li>Moves, waits, bump attacks, door opening, and inventory attempts spend one turn, including rejected attempts. Menus, selection changes, pause, help, redraws, and history scrolling spend none.</li>
+<li>Normal turn order is player action → surviving enemy actions → player effects → surviving enemy effects. New weapon effects tick that turn. Lethal player damage stops remaining processing.</li>
+<li>Accepted descent ticks only player effects on the old floor before replacement. Neither floor runs enemy actions or enemy effects during the transition. Failed descent spends an ordinary turn.</li>
+<li>Only pressing &gt; on stairs descends; walking onto them does not. Dead players cannot perform gameplay actions.</li>
+<li>Game owns the player, RNG, navigation, and turn scheduling. Level owns terrain, enemies, and ground items. AI proposes intents; the TUI translates input and renders views.</li>
+<li>Enemy IDs are stable within one floor and discarded when it is replaced. Ground-item indices shift after removal. Item transfers preserve the owned copy, including dice and effects.</li>
+</ul>
+<p>See <a href="README.md#combat-turn-order">README: combat turn order</a> and <a href="README.md#level-entity-integration-notes">level entity integration notes</a> for the concrete interfaces and timing rules.</p></section>
+
+<section id="validation"><h2>Validation baseline</h2>
+<p>On November 11, 2026, at <code>0bf82de</code>, formatting and Clippy with warnings denied passed. The offline suite passed 190 library tests, two launcher tests, and one documentation test (193 total).</p>
+<p>Coverage includes generation invariants, visibility, AI, dice combat, effects, drops, inventory ownership and rejection cases, shared turn timing, descent and overflow, death, history, help, input configuration, and rendering. A recorded full keyboard playthrough and release audit remain open above.</p></section>
+<footer class="meta">References: <a href="README.md">README</a>, <a href="docs/sdd-report.pdf">Software Design Document</a>, <a href="docs/Coding_Standards.pdf">Coding Standards</a>, and <a href="docs/scm-paydirt.pdf">SCM Plan</a>. This plan reflects the current branch; it does not assert that the work has been approved or merged into main.</footer>
+</main></body></html>

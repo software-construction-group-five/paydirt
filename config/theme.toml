@@ -9,6 +9,11 @@ muted = "#8a8478"
 accent = "#d4a64a"
 danger = "#d96854"
 
+# Unexplored map cells. Use symbol = "" to leave them blank.
+[tiles.unseen]
+symbol = "."
+color = "#1b3033"
+
 [tiles.wall]
 symbol = "#"
 color = "#93979c"

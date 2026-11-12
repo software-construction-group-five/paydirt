@@ -17,9 +17,7 @@ use ratatui::{
 
 /// Draws gameplay above a full-width message log, with status beside wide maps.
 pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
-    let [body, help] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-    frame.render_widget(Paragraph::new(view.help).style(theme.muted), help);
+    let body = frame.area();
     // Reserve the bottom log first; collapse status before losing useful map space.
     let (content, log_area) = if !view.messages.is_empty() && body.height >= 7 {
         let log_height = if body.height >= 16 { 5 } else { 3 };
@@ -82,12 +80,16 @@ pub fn draw_level(frame: &mut Frame, area: Rect, level: &LevelView<'_>, theme: &
     for dy in 0..usize::from(inner.height).min(level.map.height()) {
         for dx in 0..usize::from(inner.width).min(level.map.width()) {
             let pos = Position::new(origin_x + dx, origin_y + dy);
-            if let Some(tile) = level.map.get(pos).filter(|tile| tile.seen) {
+            if let Some(tile) = level.map.get(pos) {
                 paint(
                     frame,
                     inner.x + dx as u16,
                     inner.y + dy as u16,
-                    theme.tile(tile.kind),
+                    if tile.seen {
+                        theme.tile(tile.kind)
+                    } else {
+                        theme.unseen
+                    },
                 );
             }
         }
@@ -157,18 +159,28 @@ pub fn draw_status(frame: &mut Frame, area: Rect, status: &StatusView<'_>, theme
 
 /// Draws the newest message lines in chronological order, bounded by panel height.
 pub fn draw_messages(frame: &mut Frame, area: Rect, messages: &[&str], theme: &Theme) {
+    let lines = messages
+        .iter()
+        .rev()
+        .flat_map(|message| message.lines().rev());
+    draw_message_lines(frame, area, lines, messages.is_empty(), theme);
+}
+
+/// Draws newest-first logical lines, collecting only what fits in the panel.
+/// Lines are already split so interior blank lines retain their scroll positions.
+pub(super) fn draw_message_lines<'a>(
+    frame: &mut Frame,
+    area: Rect,
+    lines: impl Iterator<Item = &'a str>,
+    empty: bool,
+    theme: &Theme,
+) {
     let block = panel(" Message log ", theme);
     let height = usize::from(block.inner(area).height);
-    let lines: Vec<Line<'_>> = if messages.is_empty() {
+    let lines: Vec<Line<'_>> = if empty {
         vec![Line::from("No messages yet.")]
     } else {
-        let mut lines: Vec<_> = messages
-            .iter()
-            .rev()
-            .flat_map(|message| message.lines().rev())
-            .take(height)
-            .map(Line::from)
-            .collect();
+        let mut lines: Vec<_> = lines.take(height).map(Line::from).collect();
         lines.reverse();
         lines
     };
@@ -251,7 +263,7 @@ mod tests {
             .draw(|frame| renderer.render(frame, &Screen::Playing, &view))
             .unwrap()
             .buffer;
-        assert_eq!(buffer[(2, 2)].symbol(), " ");
+        assert_eq!(buffer[(2, 2)].symbol(), ".");
     }
 
     #[test]
@@ -283,7 +295,11 @@ mod tests {
             let buffer = draw_screen(20, 10, Screen::Playing, &view);
             assert_eq!(buffer[(2, 2)].symbol(), "!");
             assert_eq!(buffer[(4, 2)].symbol(), "+");
-            assert_eq!(buffer[(6, 2)].symbol(), " ");
+            assert_eq!(buffer[(6, 2)].symbol(), ".");
+            assert_eq!(
+                buffer[(6, 2)].fg,
+                ratatui::style::Color::Rgb(0x1b, 0x30, 0x33)
+            );
         }
         map.update_visibility(right);
         let mut level = LevelView::new(&map);
