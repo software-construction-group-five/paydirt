@@ -69,7 +69,7 @@ Enemies receive stable, floor-local `EnemyId` values that are never reused withi
 
 Each map tile records current visibility and persistent exploration memory. Visibility is recalculated at floor entry, after movement, and after opening a door. Previously seen terrain remains available for rendering.
 
-Sight has no distance limit. Walls, rocks, and closed doors block it; water, floor, stairs, and open doors transmit it. The first opaque tile remains visible. All eight neighboring cells are visible, while more distant rays cannot pass diagonally through blocked corners.
+Player sight reaches 10 tiles in each direction (Chebyshev distance), derived from half the maximum generated room width. Previously seen terrain remains remembered beyond that range. Walls, rocks, and closed doors block sight; water, floor, stairs, and open doors transmit it. The first opaque tile remains visible. All eight neighboring cells are visible, while more distant rays cannot pass diagonally through blocked corners. Exposed diagonal wall boundaries are revealed from visible transparent tiles immediately toward the viewer. Enemy detection retains its own species range.
 
 Entities appear only in current sight. Remembered terrain does not reveal enemies or items that have moved outside visibility. Rendering applies an additional visibility check even when callers supply custom entity views. Drawing order is terrain, ground items, enemies, and player.
 

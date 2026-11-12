@@ -156,11 +156,15 @@ Game. Call `Level::update_visibility(player_position)` after movement, floor ent
 or sight-blocking terrain changes. Updating sight spends no turn and never clears
 previously seen tiles. Invalid origins clear current visibility but preserve memory.
 
-Sight has no distance limit. Walls, rocks, and closed doors block sight; water,
+Player sight reaches 10 tiles in each direction (Chebyshev distance), half the
+maximum generated room width. Previously seen terrain remains remembered beyond
+that range. Walls, rocks, and closed doors block sight; water,
 floor, stairs, and open doors transmit it. The first opaque tile remains visible.
 All eight adjacent tiles are visible regardless of blockage, revealing room corners.
 Beyond that neighborhood, straight rays cannot pass diagonally through blocked corners. Entities do not
-block sight. `Map::has_line_of_sight(origin, target)` queries geometry without
+block sight. Opaque boundary tiles are also revealed when the transparent tile
+immediately toward the viewer is visible, so diagonal room walls are seen without
+revealing terrain behind them. `Map::has_line_of_sight(origin, target)` queries geometry without
 changing memory; `Map::is_visible(position)` reads the last visibility update.
 
 `Level::visible_enemies()` and `visible_ground_items()` filter entities using their

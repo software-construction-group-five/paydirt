@@ -2025,7 +2025,9 @@ mod tests {
             assert_eq!(game.player().unwrap().get_position(), expected);
             let map = game.level().unwrap().get_map();
             assert!(map.positions().all(|position| {
-                map.is_visible(position) == map.has_line_of_sight(expected, position)
+                map.is_visible(position)
+                    == (expected.distance(position) <= level::map::PLAYER_VISION_RADIUS
+                        && map.has_line_of_sight(expected, position))
             }));
 
             if expected != start {
@@ -2070,7 +2072,9 @@ mod tests {
                             let tile = level.get_map().get(position).unwrap();
                             tile.seen == seen
                                 && tile.visible
-                                    == level.get_map().has_line_of_sight(start, position)
+                                    == (start.distance(position)
+                                        <= level::map::PLAYER_VISION_RADIUS
+                                        && level.get_map().has_line_of_sight(start, position))
                         })
                 );
                 game.level.as_mut().unwrap().remove_enemy(id);
@@ -2204,14 +2208,18 @@ mod tests {
             assert!(game.level().unwrap().is_walkable(door));
             let map = game.level().unwrap().get_map();
             assert!(map.positions().all(|position| {
-                map.is_visible(position) == map.has_line_of_sight(beside, position)
+                map.is_visible(position)
+                    == (beside.distance(position) <= level::map::PLAYER_VISION_RADIUS
+                        && map.has_line_of_sight(beside, position))
             }));
             assert!(seen.iter().all(|&position| map.get(position).unwrap().seen));
             game.process_action(&action);
             assert_eq!(game.player().unwrap().get_position(), door);
             let map = game.level().unwrap().get_map();
             assert!(map.positions().all(|position| {
-                map.is_visible(position) == map.has_line_of_sight(door, position)
+                map.is_visible(position)
+                    == (door.distance(position) <= level::map::PLAYER_VISION_RADIUS
+                        && map.has_line_of_sight(door, position))
             }));
             return;
         }

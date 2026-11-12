@@ -26,6 +26,12 @@ const RECT_MIN_SIZE: usize = 4;
 const RECT_MAX_SIZE: usize = 10;
 const CIRCLE_MIN_RADIUS: usize = 2;
 const CIRCLE_MAX_RADIUS: usize = 6;
+/// Widest possible room, shared with the player visibility radius.
+pub(super) const MAX_ROOM_WIDTH: usize = if 2 * RECT_MAX_SIZE > 2 * CIRCLE_MAX_RADIUS + 1 {
+    2 * RECT_MAX_SIZE
+} else {
+    2 * CIRCLE_MAX_RADIUS + 1
+};
 const DOOR_CHANCE: f64 = 0.2;
 const MAX_DOORS: usize = 6;
 const ROCK_ROOM_CHANCE: f64 = 0.35;
