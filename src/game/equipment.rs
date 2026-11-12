@@ -101,7 +101,7 @@ mod tests {
     fn equip_puts_items_in_matching_slot() {
         let mut equipment = Equipment::new();
         assert_eq!(equipment.equip(get_item(0)), Ok(None)); // Pickaxe (weapon)
-        assert_eq!(equipment.equip(get_item(1)), Ok(None)); // Leather Armor (armor)
+        assert_eq!(equipment.equip(get_item(1)), Ok(None)); // Rusty Helmet (armor)
         assert_eq!(equipment.weapon, Some(get_item(0)));
         assert_eq!(equipment.armor, Some(get_item(1)));
     }

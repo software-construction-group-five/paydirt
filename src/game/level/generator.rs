@@ -7,7 +7,7 @@ use rand::{Rng, RngExt, seq::SliceRandom};
 
 use crate::game::{
     enemy::{Enemy, EnemyType},
-    item::{Item, catalog},
+    item::{Item, catalog, choose_loot},
     level::{
         Level,
         map::{Map, TileType},
@@ -181,8 +181,8 @@ fn populate(level: &mut Level, rng: &mut impl Rng) {
         return;
     }
     for position in candidates.into_iter().take(item_count) {
-        let item = items[rng.random_range(0..items.len())]
-            .clone()
+        let item = choose_loot(&items, rng)
+            .expect("eligible floor loot exists")
             .roll_spawn(level.depth(), rng);
         assert!(
             level.insert_ground_item(item, position).is_ok(),

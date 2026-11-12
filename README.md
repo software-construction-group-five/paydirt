@@ -136,8 +136,24 @@ Each floor targets `4 + min(depth, 16)` enemies and
 replacement. On cramped floors, reserve up to half the available tiles for items,
 then place as many enemies and items as fit. Placement terminates with no retries.
 
-Items are chosen uniformly from eligible entries exposed by `item::catalog()`.
-The catalog currently contains Pickaxe, Leather Armor, Health Potion, and Shovel.
+Items come from eligible entries exposed by `item::catalog()`. Floor loot has a
+5% helmet chance, independent of the number of unlocked helmets. Otherwise it
+chooses uniformly among Pickaxe, Shovel, and Health Potion. Only the highest
+unlocked helmet tier is selected; weaker helmets stop spawning when an upgrade
+unlocks. The eight-item catalog contains those three items and five helmets.
+
+| Helmet | Armor bonus | First dungeon depth | Catalog level |
+| --- | ---: | ---: | ---: |
+| Rusty Helmet | +1 | 0 | 1 |
+| Lead Helmet | +2 | 3 | 4 |
+| Iron Helmet | +3 | 6 | 7 |
+| Steel Helmet | +4 | 9 | 10 |
+| Pete's Helmet | +5 | 12 | 13 |
+
+Helmets use the existing armor slot and have fixed stats. Rusty Helmet preserves
+the former Leather Armor's +1 defense and catalog index. The maximum helmet
+bonus is +5; the player's base defense of 1 makes maximum total defense 6.
+
 Catalog level one is available at dungeon depth zero; availability uses saturating
 `depth + 1`. Identical depth and RNG seed reproduce terrain and population.
 
@@ -250,13 +266,14 @@ without moving, rolling weapon damage and subtracting defense with a minimum
 of one damage. New games equip a rolled Pickaxe with base damage 2d4; supported weapon dice are d4, d6,
 and d12. Unarmed damage is 1d4. Player HP is 40; Slime/Ghost/Goblin HP is 8/14/24,
 with damage rolls of 1d4/1d6/1d12 and defense of 0/1/2. Player base defense is 1,
-and Leather Armor adds 1. All starting flat attack modifiers are zero. Damage
+and Rusty Helmet adds 1 (later helmets add up to 5). All starting flat attack modifiers are zero. Damage
 rolls use Game’s RNG; reading weapon data and rendering never roll dice.
 Messages report actual damage, weapon effects, defeat, and drops using species
 names without enemy IDs. Equipped item names appear in the status panel. Each defeated
-enemy has a 5% chance to drop a weapon or armor from the highest unlocked catalog
-tier (level no greater than saturating depth + 1). The current catalog only has
-level-one equipment. Weapon drops roll their bonuses and rare effects at the current depth. Entering a defeated enemy's tile takes another move.
+enemy has a 5% chance to drop equipment. Successful drops select helmets 5% of
+the time and weapons 95% of the time, giving a 0.25% helmet chance per kill.
+Each category uses its own highest unlocked catalog tier (level no greater than
+saturating depth + 1), so deeper helmets never displace weapons from the drop pool. Weapon drops roll their bonuses and rare effects at the current depth. Entering a defeated enemy's tile takes another move.
 Movement attempts, door opening, and waiting report a spent turn, including blocked
 attempts by a living player. Dead-player gameplay actions are ignored without
 spending turns. Normal combat deaths immediately enter GameOver. Entity display

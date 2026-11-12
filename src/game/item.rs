@@ -193,7 +193,7 @@ struct CatalogEntry {
     bonus_damage: u32,
 }
 
-const CATALOG: [CatalogEntry; 4] = [
+const CATALOG: [CatalogEntry; 8] = [
     CatalogEntry {
         name: "Pickaxe",
         kind: ItemType::Weapon,
@@ -204,7 +204,7 @@ const CATALOG: [CatalogEntry; 4] = [
         bonus_damage: 0,
     },
     CatalogEntry {
-        name: "Leather Armor",
+        name: "Rusty Helmet",
         kind: ItemType::Armor,
         level: 1,
         damage: None,
@@ -229,6 +229,42 @@ const CATALOG: [CatalogEntry; 4] = [
         defense: 0,
         healing: None,
         bonus_damage: 2,
+    },
+    CatalogEntry {
+        name: "Lead Helmet",
+        kind: ItemType::Armor,
+        level: 4,
+        damage: None,
+        defense: 2,
+        healing: None,
+        bonus_damage: 0,
+    },
+    CatalogEntry {
+        name: "Iron Helmet",
+        kind: ItemType::Armor,
+        level: 7,
+        damage: None,
+        defense: 3,
+        healing: None,
+        bonus_damage: 0,
+    },
+    CatalogEntry {
+        name: "Steel Helmet",
+        kind: ItemType::Armor,
+        level: 10,
+        damage: None,
+        defense: 4,
+        healing: None,
+        bonus_damage: 0,
+    },
+    CatalogEntry {
+        name: "Pete's Helmet",
+        kind: ItemType::Armor,
+        level: 13,
+        damage: None,
+        defense: 5,
+        healing: None,
+        bonus_damage: 0,
     },
 ];
 
@@ -258,6 +294,34 @@ pub fn catalog() -> impl Iterator<Item = Item> {
         .map(|(index, entry)| entry.item(index as u32))
 }
 
+/// Selects loot with a fixed 5% armor share when both categories are available.
+/// Armor is selected uniformly from the highest unlocked tier supplied by callers;
+/// other items remain uniform. Callers must filter locked items before selection.
+pub(crate) fn choose_loot(items: &[Item], rng: &mut impl Rng) -> Option<Item> {
+    let armor_level = items
+        .iter()
+        .filter(|item| item.kind == ItemType::Armor)
+        .map(|item| item.level)
+        .max();
+    let armor: Vec<_> = items
+        .iter()
+        .filter(|item| item.kind == ItemType::Armor && Some(item.level) == armor_level)
+        .collect();
+    let other: Vec<_> = items
+        .iter()
+        .filter(|item| item.kind != ItemType::Armor)
+        .collect();
+    let pool = if other.is_empty() || (!armor.is_empty() && rng.random_range(0..20) == 0) {
+        &armor
+    } else {
+        &other
+    };
+    if pool.is_empty() {
+        return None;
+    }
+    Some((*pool[rng.random_range(0..pool.len())]).clone())
+}
+
 /// Accepts an item index and returns the matching Item (Contract 18).
 ///
 /// Panics if no item has that index.
@@ -273,6 +337,76 @@ pub fn get_item(index: u32) -> Item {
 #[cfg(test)]
 mod tests {
     use super::{ItemType, catalog, get_item};
+
+    #[test]
+    fn helmet_catalog_progression_and_equipped_defense() {
+        use crate::game::{
+            equipment::Equipment, inventory::Inventory, player::Player, position::Position,
+            stats::Stats,
+        };
+        for (index, name, defense, level) in [
+            (1, "Rusty Helmet", 1, 1),
+            (4, "Lead Helmet", 2, 4),
+            (5, "Iron Helmet", 3, 7),
+            (6, "Steel Helmet", 4, 10),
+            (7, "Pete's Helmet", 5, 13),
+        ] {
+            let helmet = get_item(index);
+            assert_eq!(
+                (
+                    helmet.name.as_str(),
+                    helmet.combat().defense(),
+                    helmet.level
+                ),
+                (name, defense, level)
+            );
+            assert_eq!(helmet.kind, ItemType::Armor);
+            let mut equipment = Equipment::new();
+            equipment.equip(helmet).unwrap();
+            let player = Player::new(
+                Position::new(1, 1),
+                Stats::new(40, 0, 1),
+                Inventory::new(),
+                equipment,
+            );
+            assert_eq!(player.effective_defense(), 1 + defense);
+        }
+    }
+
+    #[test]
+    fn loot_keeps_helmets_rare_and_at_the_best_unlocked_tier() {
+        use rand::{SeedableRng, rngs::StdRng};
+        for depth in [0_u32, 2, 3, 5, 6, 8, 9, 11, 12, 20, u32::MAX] {
+            let items: Vec<_> = catalog()
+                .filter(|item| item.level <= depth.saturating_add(1))
+                .collect();
+            let mut rng = StdRng::seed_from_u64(111);
+            let mut helmets = 0;
+            let expected_defense = 1 + (depth / 3).min(4) as i32;
+            for _ in 0..10000 {
+                let item = super::choose_loot(&items, &mut rng).unwrap();
+                if item.kind == ItemType::Armor {
+                    helmets += 1;
+                    assert_eq!(item.combat().defense(), expected_defense);
+                    assert!(item.level <= depth.saturating_add(1));
+                }
+            }
+            assert!(
+                (400..600).contains(&helmets),
+                "depth {depth}: {helmets} helmets"
+            );
+        }
+        let mut rng = StdRng::seed_from_u64(1);
+        assert!(super::choose_loot(&[], &mut rng).is_none());
+        assert_eq!(
+            super::choose_loot(&[get_item(1)], &mut rng),
+            Some(get_item(1))
+        );
+        assert_eq!(
+            super::choose_loot(&[get_item(2)], &mut rng),
+            Some(get_item(2))
+        );
+    }
 
     #[test]
     fn catalog_modifiers_match_initial_equipment_balance() {
@@ -297,7 +431,7 @@ mod tests {
     #[test]
     fn catalog_lookup_preserves_indices_and_returns_independent_items() {
         let items: Vec<_> = catalog().collect();
-        assert_eq!(items.len(), 4);
+        assert_eq!(items.len(), 8);
         for (index, item) in items.iter().enumerate() {
             assert_eq!(item.index, index as u32);
             assert_eq!(*item, get_item(item.index));

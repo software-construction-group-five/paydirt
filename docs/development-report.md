@@ -1,7 +1,7 @@
 # Paydirt Development Report
 
 **Date:** November 11, 2026  
-**Code reviewed:** `feature/combat-turns`, working tree based on `450a684`, including weapon rolls and rare effects<br>
+**Code reviewed:** `feature/combat-turns`, working tree based on `5230cf8`, including helmet progression and loot tuning<br>
 **Package:** `paydirt` 0.1.0, Rust edition 2024
 
 ## Project overview
@@ -90,7 +90,7 @@ Entities appear only in current sight. Remembered terrain does not reveal enemie
 
 Unarmed player damage is 1d4. Supported die sizes are d4, d6, and d12. Base actor attack modifiers are zero; equipped weapons add their rolled flat damage bonus. Weakness subtracts its power from the outgoing attack roll before defense. Armor adds to effective defense without rewriting base statistics. Attack damage is `max(1, weakened roll including weapon bonus − effective defense)`, and messages report actual HP lost.
 
-Moving into a cardinally adjacent enemy performs a bump attack without moving the player. Direct kills remove enemies before they can retaliate. Direct and effect kills share one defeat path, preventing duplicate removal or drops. Each defeated enemy has a 5% chance to drop equipment chosen uniformly from the highest unlocked catalog tier. Weapon drops roll their bonus and rare effect at the current floor depth.
+Moving into a cardinally adjacent enemy performs a bump attack without moving the player. Direct kills remove enemies before they can retaliate. Direct and effect kills share one defeat path, preventing duplicate removal or drops. Each defeated enemy has a 5% chance to drop equipment. Successful drops select a helmet 5% of the time and a weapon 95% of the time, giving a 0.25% helmet chance per kill. Selection uses the highest unlocked tier within each category, preventing higher-level helmets from displacing weapon drops. Weapon drops roll their bonus and rare effect at the current floor depth.
 
 Each newly spawned weapon has a **1%** chance to receive one on-hit effect, chosen equally from Bleed, Weakness, and Lightning. Effect power is one quarter of average base weapon damage, including the Shovel’s base bonus, rounded up with a minimum of one. It excludes the randomized depth bonus and the current attack roll; both current weapons have effect power two.
 
@@ -133,12 +133,16 @@ Detection requires range and terrain line of sight. Healthy detected enemies app
 | --- | --- |
 | Pickaxe | Base weapon damage 2d4, plus a rolled bonus. |
 | Shovel | Base weapon damage 2d4+2, plus a rolled bonus. |
-| Leather Armor | Adds one defense while equipped. |
+| Rusty Helmet | +1 defense; first available at depth 0 (catalog level 1). Replaces Leather Armor at the same index and stats. |
+| Lead Helmet | +2 defense; first available at depth 3 (catalog level 4). |
+| Iron Helmet | +3 defense; first available at depth 6 (catalog level 7). |
+| Steel Helmet | +4 defense; first available at depth 9 (catalog level 10). |
+| Pete's Helmet | +5 defense; first available at depth 12 (catalog level 13). |
 | Health Potion | Restores up to 12 HP, capped at maximum health. |
 
 New weapons roll once when created as starting equipment, generated floor loot, or enemy drops. With `tier = min(depth / 4, 1000)`, the added bonus is `tier + random(0..=2 + tier)`, inclusive. A Pickaxe therefore starts at 2d4 plus zero to two damage at depth zero; a Shovel adds its base +2 as well. The cap keeps scaling bounded at extreme depths. Attack dice continue to roll independently on each hit, while transfers and descent preserve the original weapon’s rolled data.
 
-All current entries are catalog level one. Carried limits are three weapons, one armor, and five consumables; equipped items are separate from those limits.
+Pickaxe, Shovel, Health Potion, and Rusty Helmet remain catalog level one. Floor loot selects helmets with a fixed 5% probability; the remaining 95% is split uniformly among the weapons and potion. Only the best unlocked helmet tier spawns, keeping armor rare as the catalog grows and avoiding obsolete helmet loot. Helmets have fixed bonuses and use the existing armor slot. The maximum helmet bonus is +5, giving 6 total defense with the player's base defense of 1. Carried limits are three weapons, one armor, and five consumables; equipped items are separate from those limits.
 
 Inventory rows distinguish duplicate carried copies and equipped slots. Pickup takes the first ground item on the player’s tile after checking capacity. Equipping swaps the selected carried item into its slot and returns displaced equipment to the freed pack space. Unequipping checks capacity before changing ownership. Players can drop carried or equipped items directly onto their tile.
 
@@ -172,11 +176,13 @@ cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings
 ```
 
-The test suite passed **202 tests**: 199 library tests, two executable tests, and one documentation test. Coverage includes generation reproducibility and connectivity, spawn restrictions, visibility, AI decisions, dice calculations, drops, effect timing, inventory ownership, rejected actions, descent and overflow, death handling, restart, help, configuration parsing, and rendering across small/resized test backends.
+The test suite passed **205 tests**: 202 library tests, two executable tests, and one documentation test. Coverage includes generation reproducibility and connectivity, spawn restrictions, visibility, AI decisions, dice calculations, drops, effect timing, inventory ownership, rejected actions, descent and overflow, death handling, restart, help, configuration parsing, and rendering across small/resized test backends.
 
 Three new visibility regressions cover diagonal boundary walls in square and rectangular rooms, hidden terrain behind diagonal walls, and the vision-range boundary for floors and walls with exploration memory retained after moving away. Movement and door-opening tests now verify visibility against both terrain line of sight and the player’s range cap.
 
 Six additional weapon/effect regressions cover deterministic depth-scaled rolls and rare-effect distribution, Bleed and Weakness duration, Weakness damage reduction on the hit turn, Lightning splash and kill handling, rolled-weapon ownership through transfers, and damage-text colors. Launcher assertions now accommodate randomized starting weapon labels and wrapping effect names.
+
+Three helmet regressions verify catalog names, stats and equipped defense, depth unlock boundaries and floor-loot rarity, and equipment-drop rarity across all helmet tiers and maximum depth. Existing inventory tests now expect Rusty Helmet.
 
 These results establish an automated baseline. They do not establish completion of a real-terminal playthrough, balance testing, release review, or customer acceptance.
 
@@ -186,14 +192,14 @@ Project standards call for default Rust formatting, Clippy checks, composition, 
 
 The detailed task list is maintained in [TODO.html](../TODO.html). Remaining work is to:
 
-- Review the expanded four-item catalog and decide whether further content or consumable behavior belongs in this increment. Shovel, weapon rolls, Bleed, Weakness, and Lightning are implemented.
-- Playtest early and deeper floors and tune combat, depth-scaled weapon bonuses, the 1% effect chance, effect power/duration/radius, population, healing, and drops using recorded results.
+- Review the expanded eight-item catalog and decide whether further content or consumable behavior belongs in this increment. Shovel, weapon rolls, Bleed, Weakness, and Lightning, and five helmet tiers are implemented.
+- Playtest early and deeper floors and tune combat, depth-scaled weapon bonuses, the 1% effect chance, effect power/duration/radius, helmet unlock depths and rarity, population, healing, and drops using recorded results.
 - Review existing tests for gaps across a complete session and add focused deterministic integration coverage where needed.
 - Record a full keyboard playthrough, configuration/theme checks, resize behavior, and terminal cleanup on normal and error exits.
 - Reconcile older SDD signatures and ownership descriptions with the current implementation, then refresh developer documentation.
 - Run checks after final changes and complete the project’s review, demonstration, and baseline audit process.
 
-Current scope has local enemy movement, fixed species statistics, a four-item catalog, in-memory sessions, and downward progression without an implemented victory condition. Broader pathfinding, persistence, or a victory condition would require a scope decision rather than being assumed requirements.
+Current scope has local enemy movement, fixed species statistics, a eight-item catalog, in-memory sessions, and downward progression without an implemented victory condition. Broader pathfinding, persistence, or a victory condition would require a scope decision rather than being assumed requirements.
 
 ## Project references
 
