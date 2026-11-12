@@ -16,6 +16,11 @@ Characters and foreground colors are defined in `config/theme.toml`. The TUI
 provides `Theme::load(path)` to read it. Backgrounds always use the terminal
 default. Rocks use dark gray and water uses blue.
 
+`[tiles.unseen]` controls unexplored cells, defaulting to a very dark teal-gray
+`.` (`#1b3033`). Set `symbol = ""` to leave them blank. Older themes without this
+section retain blank unseen cells. This appearance never reveals hidden terrain
+or entities.
+
 Entity settings use `[enemies.goblin]`, `[enemies.ghost]`, `[enemies.slime]`,
 `[items.weapon]`, `[items.armor]`, and `[items.consumable]`, each with `symbol` and
 `color`. Missing entity entries use defaults, so existing themes remain valid.
@@ -118,7 +123,7 @@ current tile's visibility. Remembered terrain does not reveal entities outside
 current sight. Ground-item filtering preserves storage indices for selection.
 Full collections remain available for simulation independently of visibility.
 
-The renderer leaves unseen terrain blank, retains seen terrain with its configured
+The renderer fills unseen cells with the unseen glyph, retains seen terrain with its configured
 appearance, and draws entities only on currently visible tiles. It applies these
 rules on both gameplay and paused screens and does not update exploration itself.
 Items render below enemies, and the player renders last when supplied. Multiple

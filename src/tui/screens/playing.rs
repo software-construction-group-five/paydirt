@@ -82,12 +82,16 @@ pub fn draw_level(frame: &mut Frame, area: Rect, level: &LevelView<'_>, theme: &
     for dy in 0..usize::from(inner.height).min(level.map.height()) {
         for dx in 0..usize::from(inner.width).min(level.map.width()) {
             let pos = Position::new(origin_x + dx, origin_y + dy);
-            if let Some(tile) = level.map.get(pos).filter(|tile| tile.seen) {
+            if let Some(tile) = level.map.get(pos) {
                 paint(
                     frame,
                     inner.x + dx as u16,
                     inner.y + dy as u16,
-                    theme.tile(tile.kind),
+                    if tile.seen {
+                        theme.tile(tile.kind)
+                    } else {
+                        theme.unseen
+                    },
                 );
             }
         }
@@ -251,7 +255,7 @@ mod tests {
             .draw(|frame| renderer.render(frame, &Screen::Playing, &view))
             .unwrap()
             .buffer;
-        assert_eq!(buffer[(2, 2)].symbol(), " ");
+        assert_eq!(buffer[(2, 2)].symbol(), ".");
     }
 
     #[test]
@@ -283,7 +287,11 @@ mod tests {
             let buffer = draw_screen(20, 10, Screen::Playing, &view);
             assert_eq!(buffer[(2, 2)].symbol(), "!");
             assert_eq!(buffer[(4, 2)].symbol(), "+");
-            assert_eq!(buffer[(6, 2)].symbol(), " ");
+            assert_eq!(buffer[(6, 2)].symbol(), ".");
+            assert_eq!(
+                buffer[(6, 2)].fg,
+                ratatui::style::Color::Rgb(0x1b, 0x30, 0x33)
+            );
         }
         map.update_visibility(right);
         let mut level = LevelView::new(&map);
