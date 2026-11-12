@@ -7,8 +7,9 @@ turn order, equipment drops, descent, and game-over message history. Scaled stat
 equipment modifiers, reusable weapon effects, enemy effect operations, and AI
 intent types are implemented. Phase 2 adds pure damage calculation and controlled
 enemy damage/effect updates through Level, reporting actual HP loss and death.
-Attack resolution through player actions and turn scheduling remain
-unfinished; drops and game-over history controls follow in later phases.
+Phase 3 connects player bump attacks, surviving-target weapon effects, defeat
+messages, immediate enemy removal, and rare equipment drops. Enemy decisions,
+turn scheduling, and game-over history controls remain unfinished.
 
 ## Theme configuration
 
@@ -166,9 +167,15 @@ older signatures; this branch uses the following concrete ownership rules:
 Game owns the Player and MessageLog, checks player/enemy collisions, and refreshes
 sight after movement and door interactions. The launcher supplies the active player
 position, health, and messages to the renderer. Bumping a closed door opens it
-without moving; entering it takes another action. Enemies currently block movement.
+without moving; entering it takes another action. Bumping an enemy attacks it
+without moving, using effective attack minus defense with a minimum of one damage.
+Messages report actual damage, weapon effects, defeat, and drops. Each defeated
+enemy has a 5% chance to drop a weapon or armor from the highest unlocked catalog
+tier (level no greater than saturating depth + 1). The current catalog only has
+level-one equipment. Entering a defeated enemy's tile takes another move.
 Movement attempts, door opening, and waiting report a spent turn, including blocked
-attempts. Combat, enemy turn updates, and death removal remain unfinished. Entity
+attempts. Enemies do not retaliate yet, and status effects do not tick automatically;
+the shared turn loop remains unfinished. Entity
 display and visibility queries do not spend turns.
 
 Run `cargo fmt --check`, `cargo test --offline`, and

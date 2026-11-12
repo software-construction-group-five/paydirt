@@ -18,9 +18,10 @@ pub mod screen;
 pub mod stats;
 
 use action::{Action, TurnResult};
+use combat::{attack_damage, equipment_drop};
 use equipment::Equipment;
 use inventory::Inventory;
-use level::{Level, generator::LevelGenerator};
+use level::{EnemyId, Level, generator::LevelGenerator};
 use message_log::MessageLog;
 use player::Player;
 use rand::{SeedableRng, rngs::StdRng};
@@ -154,7 +155,7 @@ impl Game {
     /// Moves the player one tile if the target is on the map and walkable;
     /// otherwise the player stays put (Game Contract 2, using Level Contract 9
     /// and Player Contract 7). Moving into a closed door opens it instead, and
-    /// the player stays put. Enemies block movement until combat exists.
+    /// the player stays put. Bumping an enemy attacks without moving.
     /// Updates line of sight after a move. Always spends the turn, even when blocked.
     fn move_player(&mut self, dx: isize, dy: isize) -> TurnResult {
         let (Some(player), Some(level)) = (self.player.as_mut(), self.level.as_mut()) else {
@@ -172,13 +173,87 @@ impl Game {
         if !level.is_walkable(target) {
             return TurnResult::Spent;
         }
-        if level.enemy_at(target).is_some() {
-            // TODO(joseph): attack the enemy once combat-turns is merged (Level Contract 10)
+        if let Some(id) = level.enemy_at(target) {
+            self.attack_enemy(id);
             return TurnResult::Spent;
         }
         player.set_position(target);
         level.update_visibility(target);
         TurnResult::Spent
+    }
+
+    /// Resolves a validated cardinal bump attack without advancing other actors.
+    fn attack_enemy(&mut self, id: EnemyId) {
+        let (Some(player), Some(level)) = (self.player.as_ref(), self.level.as_mut()) else {
+            return;
+        };
+        let Some(enemy) = level.enemy(id) else {
+            return;
+        };
+        if player.get_stats().is_dead()
+            || !player
+                .get_position()
+                .is_cardinal_neighbor(*enemy.position())
+        {
+            return;
+        }
+        if enemy.stats().is_dead() {
+            self.defeat_enemy(id);
+            return;
+        }
+        let defender = format!("{:?} ({id:?})", enemy.kind());
+        let damage = attack_damage(player.effective_attack(), enemy.stats().defense());
+        let effect = player.weapon_effect();
+        let effect_name = effect.as_ref().map(|effect| effect.name().to_owned());
+        let Some(outcome) = level.damage_enemy(id, damage, effect) else {
+            return;
+        };
+        self.log.add_message(format!(
+            "You hit {defender} for {} damage.",
+            outcome.hp_lost
+        ));
+        if outcome.effect_applied
+            && let Some(name) = effect_name
+        {
+            self.log
+                .add_message(format!("You apply {name} to {defender}."));
+        }
+        if outcome.is_dead {
+            self.defeat_enemy(id);
+        }
+    }
+
+    /// Removes a defeated enemy once and resolves its equipment drop.
+    /// Effect deaths will use this same path when turn scheduling is connected.
+    fn defeat_enemy(&mut self, id: EnemyId) {
+        let Some(level) = self.level.as_mut() else {
+            return;
+        };
+        let Some(enemy) = level.enemy(id) else {
+            return;
+        };
+        if !enemy.stats().is_dead() {
+            return;
+        }
+        let position = *enemy.position();
+        // Level insertion and movement guarantee walkable death tiles. Check
+        // before removing ownership so an invariant failure cannot lose loot.
+        assert!(
+            level.is_walkable(position),
+            "enemy death tile must be walkable"
+        );
+        let Some(enemy) = level.remove_enemy(id) else {
+            return;
+        };
+        self.log
+            .add_message(format!("You defeat {:?} ({id:?}).", enemy.kind()));
+        if let Some(item) = equipment_drop(level.depth(), item::catalog(), &mut self.rng) {
+            let message = format!("{:?} ({id:?}) drops {}.", enemy.kind(), item.name);
+            level
+                .insert_ground_item(item, position)
+                .expect("validated enemy death tile accepts ground items");
+            self.log.add_message(message);
+        }
     }
 
     fn return_to_menu(&mut self) {
@@ -193,6 +268,212 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn combat_game(
+        attack: i32,
+        target_hp: u32,
+        effect: Option<stats::EffectSpec>,
+    ) -> (Game, EnemyId, Action) {
+        let mut game = Game::new();
+        game.rng = StdRng::seed_from_u64(42);
+        game.process_action(&Action::Confirm);
+        let level = game.level.as_mut().unwrap();
+        let ids: Vec<_> = level.enemies().map(|(id, _)| id).collect();
+        for id in ids {
+            level.remove_enemy(id);
+        }
+        while level.remove_ground_item(0).is_some() {}
+        let start = level.player_start();
+        let (target, action) = [
+            (start.offset(1, 0), Action::MoveRight),
+            (start.offset(-1, 0), Action::MoveLeft),
+            (start.offset(0, 1), Action::MoveDown),
+            (start.offset(0, -1), Action::MoveUp),
+        ]
+        .into_iter()
+        .find_map(|(position, action)| {
+            position
+                .filter(|&p| level.is_walkable(p))
+                .map(|p| (p, action))
+        })
+        .unwrap();
+        let id = level
+            .insert_enemy(enemy::Enemy::new(enemy::EnemyType::Goblin, target))
+            .ok()
+            .unwrap();
+        level.damage_enemy(id, 100 - target_hp, None);
+        let mut equipment = Equipment::new();
+        if let Some(effect) = effect {
+            equipment
+                .equip(
+                    item::get_item(0).with_combat(item::CombatModifiers::weapon(3, Some(effect))),
+                )
+                .unwrap();
+        }
+        game.player = Some(Player::new(
+            start,
+            Stats::new(200, attack, 5),
+            Inventory::new(),
+            equipment,
+        ));
+        (game, id, action)
+    }
+
+    #[test]
+    fn bump_attack_spends_one_turn_without_moving_or_advancing_other_actors() {
+        let (mut game, id, action) = combat_game(15, 100, None);
+        let start = game.player().unwrap().get_position();
+        let level = game.level.as_mut().unwrap();
+        let other_position = level
+            .get_map()
+            .positions()
+            .find(|&p| level.is_walkable(p) && p != start && level.enemy_at(p).is_none())
+            .unwrap();
+        let other = level
+            .insert_enemy(enemy::Enemy::new(enemy::EnemyType::Slime, other_position))
+            .ok()
+            .unwrap();
+        assert_eq!(game.process_action(&action), TurnResult::Spent);
+        assert_eq!(game.player().unwrap().get_position(), start);
+        assert_eq!(game.player().unwrap().get_stats().hp(), 200);
+        let level = game.level().unwrap();
+        assert_eq!(level.enemy(id).unwrap().stats().hp(), 90);
+        assert_eq!(level.enemy(other).unwrap().stats().hp(), 30);
+        assert_eq!(*level.enemy(other).unwrap().position(), other_position);
+        assert_eq!(
+            game.message_log().history(),
+            &[format!("You hit Goblin ({id:?}) for 10 damage.")]
+        );
+    }
+
+    #[test]
+    fn weapon_bonus_and_fresh_effects_apply_without_automatic_ticks() {
+        let (mut game, id, action) =
+            combat_game(15, 100, Some(stats::EffectSpec::new("Poison".into(), 7, 3)));
+        for expected_hp in [87, 74] {
+            assert_eq!(game.process_action(&action), TurnResult::Spent);
+            assert_eq!(
+                game.level().unwrap().enemy(id).unwrap().stats().hp(),
+                expected_hp
+            );
+        }
+        let effects = game
+            .level()
+            .unwrap()
+            .enemy(id)
+            .unwrap()
+            .stats()
+            .status_effects();
+        assert_eq!(effects.len(), 2);
+        assert!(effects.iter().all(|effect| effect.turns_remaining() == 3));
+        let log = game.message_log().history();
+        assert_eq!(log.len(), 4);
+        assert!(log[0].contains("13 damage"));
+        assert!(log[1].contains("apply Poison"));
+    }
+
+    #[test]
+    fn lethal_bump_removes_only_target_and_requires_another_action_to_enter_tile() {
+        let (mut game, id, action) =
+            combat_game(15, 4, Some(stats::EffectSpec::new("Poison".into(), 7, 3)));
+        let start = game.player().unwrap().get_position();
+        let target = *game.level().unwrap().enemy(id).unwrap().position();
+        assert_eq!(game.process_action(&action), TurnResult::Spent);
+        assert!(game.level().unwrap().enemy(id).is_none());
+        assert_eq!(game.player().unwrap().get_position(), start);
+        let log = game.message_log().history();
+        assert!(log[0].contains("4 damage"));
+        assert!(log[1].contains("defeat Goblin"));
+        assert!(!log.iter().any(|line| line.contains("Poison")));
+        assert_eq!(game.process_action(&action), TurnResult::Spent);
+        assert_eq!(game.player().unwrap().get_position(), target);
+    }
+
+    #[test]
+    fn attacks_reject_distant_diagonal_missing_dead_player_and_paused_requests() {
+        let (mut game, id, action) = combat_game(15, 100, None);
+        let target = *game.level().unwrap().enemy(id).unwrap().position();
+        for origin in [
+            target.offset(1, 1).unwrap(),
+            target.offset(2, 0).unwrap(),
+            target,
+        ] {
+            game.player.as_mut().unwrap().set_position(origin);
+            game.attack_enemy(id);
+            assert_eq!(game.level().unwrap().enemy(id).unwrap().stats().hp(), 100);
+        }
+        let start = game.level().unwrap().player_start();
+        game.player.as_mut().unwrap().set_position(start);
+        game.process_action(&Action::Pause);
+        assert_eq!(game.process_action(&action), TurnResult::NotSpent);
+        assert_eq!(game.level().unwrap().enemy(id).unwrap().stats().hp(), 100);
+        game.process_action(&Action::Pause);
+        game.player.as_mut().unwrap().update_health(-200, None);
+        assert_eq!(game.process_action(&action), TurnResult::Spent);
+        assert_eq!(game.level().unwrap().enemy(id).unwrap().stats().hp(), 100);
+        game.level.as_mut().unwrap().remove_enemy(id);
+        game.attack_enemy(id);
+        assert!(game.message_log().history().is_empty());
+    }
+
+    #[test]
+    fn defeat_rolls_once_and_drops_owned_equipment_at_the_death_tile() {
+        use rand::RngExt;
+        let mut dropped = false;
+        let mut skipped = false;
+        for seed in 0..200 {
+            let (mut game, id, action) = combat_game(150, 100, None);
+            let position = *game.level().unwrap().enemy(id).unwrap().position();
+            // Existing items can share the death tile with the new equipment.
+            game.level
+                .as_mut()
+                .unwrap()
+                .insert_ground_item(item::get_item(2), position)
+                .unwrap();
+            game.rng = StdRng::seed_from_u64(seed);
+            let mut expected_rng = StdRng::seed_from_u64(seed);
+            let expected = equipment_drop(0, item::catalog(), &mut expected_rng);
+            game.process_action(&action);
+            let items = game.level().unwrap().ground_items();
+            if let Some(expected) = expected {
+                dropped = true;
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[1].item, expected);
+                assert_eq!(items[1].position, position);
+                assert!(
+                    game.message_log()
+                        .history()
+                        .last()
+                        .unwrap()
+                        .contains("drops")
+                );
+            } else {
+                skipped = true;
+                assert_eq!(items.len(), 1);
+            }
+            let before_log = game.message_log().history().to_vec();
+            let count = items.len();
+            game.defeat_enemy(id);
+            assert_eq!(game.level().unwrap().ground_items().len(), count);
+            assert_eq!(game.message_log().history(), before_log);
+            assert_eq!(game.rng.random::<u64>(), expected_rng.random::<u64>());
+        }
+        assert!(dropped && skipped);
+    }
+
+    #[test]
+    fn defeat_path_rejects_living_enemies_and_accepts_effect_deaths() {
+        let (mut game, id, _) = combat_game(15, 1, None);
+        game.defeat_enemy(id);
+        assert!(game.level().unwrap().enemy(id).is_some());
+        assert!(game.message_log().history().is_empty());
+        let level = game.level.as_mut().unwrap();
+        level.damage_enemy(id, 0, Some(stats::StatusEffect::new("Poison".into(), 5, 1)));
+        assert!(level.tick_enemy_effects(id).unwrap().is_dead);
+        game.defeat_enemy(id);
+        assert!(game.level().unwrap().enemy(id).is_none());
+        assert!(game.message_log().history()[0].contains("defeat"));
+    }
 
     #[test]
     fn menu_and_pause_navigation_preserves_the_active_level() {
@@ -292,7 +573,7 @@ mod tests {
                 assert_eq!(game.player().unwrap().get_position(), start);
                 let level = game.level().unwrap();
                 assert_eq!(level.enemy_at(expected), Some(id));
-                assert_eq!(level.enemy(id).unwrap().stats().hp(), 30);
+                assert_eq!(level.enemy(id).unwrap().stats().hp(), 17);
                 assert!(
                     level
                         .get_map()
