@@ -100,6 +100,7 @@ pub struct Item {
     pub level: u32,
     combat: CombatModifiers,
     healing: Option<i32>,
+    lamp_fuel: bool,
 }
 
 impl Item {
@@ -112,6 +113,7 @@ impl Item {
             level,
             combat: CombatModifiers::default(),
             healing: None,
+            lamp_fuel: false,
         }
     }
 
@@ -175,6 +177,11 @@ impl Item {
         self
     }
 
+    /// Whether this consumable refills the lamp rather than healing.
+    pub fn is_lamp_fuel(&self) -> bool {
+        self.lamp_fuel
+    }
+
     /// Healing supplied by this consumable, if it has a supported use effect.
     pub fn healing(&self) -> Option<i32> {
         self.healing
@@ -193,7 +200,7 @@ struct CatalogEntry {
     bonus_damage: u32,
 }
 
-const CATALOG: [CatalogEntry; 8] = [
+const CATALOG: [CatalogEntry; 9] = [
     CatalogEntry {
         name: "Pickaxe",
         kind: ItemType::Weapon,
@@ -266,7 +273,19 @@ const CATALOG: [CatalogEntry; 8] = [
         healing: None,
         bonus_damage: 0,
     },
+    CatalogEntry {
+        name: "Lamp Fuel",
+        kind: ItemType::Consumable,
+        level: 1,
+        damage: None,
+        defense: 0,
+        healing: None,
+        bonus_damage: 0,
+    },
 ];
+
+/// Stable catalog index for the separately generated fuel supply.
+pub const LAMP_FUEL_INDEX: u32 = 8;
 
 impl CatalogEntry {
     fn item(&self, index: u32) -> Item {
@@ -276,7 +295,8 @@ impl CatalogEntry {
             bonus_damage: self.bonus_damage,
             on_hit: None,
         };
-        let item = Item::new(index, self.name, self.kind, self.level).with_combat(combat);
+        let mut item = Item::new(index, self.name, self.kind, self.level).with_combat(combat);
+        item.lamp_fuel = index == LAMP_FUEL_INDEX;
         if let Some(healing) = self.healing {
             item.with_healing(healing)
         } else {
@@ -309,7 +329,7 @@ pub(crate) fn choose_loot(items: &[Item], rng: &mut impl Rng) -> Option<Item> {
         .collect();
     let other: Vec<_> = items
         .iter()
-        .filter(|item| item.kind != ItemType::Armor)
+        .filter(|item| item.kind != ItemType::Armor && !item.is_lamp_fuel())
         .collect();
     let pool = if other.is_empty() || (!armor.is_empty() && rng.random_range(0..20) == 0) {
         &armor
@@ -431,7 +451,7 @@ mod tests {
     #[test]
     fn catalog_lookup_preserves_indices_and_returns_independent_items() {
         let items: Vec<_> = catalog().collect();
-        assert_eq!(items.len(), 8);
+        assert_eq!(items.len(), 9);
         for (index, item) in items.iter().enumerate() {
             assert_eq!(item.index, index as u32);
             assert_eq!(*item, get_item(item.index));

@@ -74,6 +74,8 @@ impl<'a> LevelView<'a> {
 /// Optional player information, formatted by the caller from available state.
 #[derive(Default)]
 pub struct StatusView<'a> {
+    /// Elapsed session turns and remaining lamp fuel.
+    pub turns_and_fuel: Option<(u64, u32)>,
     /// Current and maximum HP, if available.
     pub health: Option<(i32, i32)>,
     /// Descriptions of active effects.

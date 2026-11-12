@@ -25,6 +25,8 @@ pub enum ItemError {
     Full,
     /// Healing would have no effect.
     FullHealth,
+    /// Refueling would have no effect.
+    FullLamp,
     /// A dead player cannot use items.
     Dead,
 }
@@ -36,6 +38,7 @@ impl std::fmt::Display for ItemError {
             Self::WrongCategory => "That item cannot be used for this action.",
             Self::Full => "That inventory category is full.",
             Self::FullHealth => "You are already at full health; the potion is kept.",
+            Self::FullLamp => "Your lamp is full; the fuel is kept.",
             Self::Dead => "You cannot use items after death.",
         })
     }
@@ -105,7 +108,7 @@ impl Player {
         Ok(())
     }
 
-    /// Consumes exactly one healing item on success and returns actual HP restored.
+    /// Consumes one potion or fuel on success, returning HP or lamp turns restored.
     pub fn use_carried(&mut self, index: usize) -> Result<i32, ItemError> {
         if self.stats.is_dead() {
             return Err(ItemError::Dead);
@@ -117,6 +120,15 @@ impl Player {
             .ok_or(ItemError::Missing)?;
         if item.kind != ItemType::Consumable {
             return Err(ItemError::WrongCategory);
+        }
+        if item.is_lamp_fuel() {
+            if self.stats.lamp_fuel() == 200 {
+                return Err(ItemError::FullLamp);
+            }
+            self.inventory
+                .remove_entry(index)
+                .expect("selected fuel exists");
+            return Ok(self.stats.refuel_lamp() as i32);
         }
         let healing = item.healing().ok_or(ItemError::WrongCategory)?;
         if self.stats.hp() == self.stats.max_hp() {
@@ -224,6 +236,11 @@ impl Player {
         }
     }
 
+    /// Counts one spent player action and burns lamp fuel.
+    pub fn spend_turn(&mut self) {
+        self.stats.spend_turn();
+    }
+
     /// Applies status effect damage for one turn and returns the HP lost
     /// (private responsibility: calculate status effects)
     pub fn tick_status_effects(&mut self) -> i32 {
@@ -233,6 +250,32 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fuel_at_full_lamp_is_retained_and_refueling_preserves_health() {
+        use super::*;
+        let mut player = Player::new(
+            Position::new(1, 1),
+            Stats::new(40, 0, 1),
+            Inventory::new(),
+            Equipment::new(),
+        );
+        player
+            .receive_item(crate::game::item::get_item(
+                crate::game::item::LAMP_FUEL_INDEX,
+            ))
+            .unwrap();
+        assert_eq!(player.use_carried(0), Err(ItemError::FullLamp));
+        assert_eq!(player.get_inventory().items().len(), 1);
+        player.update_health(-10, None);
+        for _ in 0..200 {
+            player.spend_turn();
+        }
+        assert_eq!(player.use_carried(0), Ok(200));
+        assert_eq!(player.get_stats().hp(), 30);
+        assert_eq!(player.get_stats().lamp_fuel(), 200);
+        assert!(player.get_inventory().items().is_empty());
+    }
+
     use super::{Equipment, Inventory, Player, Position, Stats, StatusEffect};
 
     #[test]

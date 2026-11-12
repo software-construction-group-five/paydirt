@@ -1,7 +1,7 @@
 # Paydirt Development Report
 
 **Date:** November 11, 2026  
-**Code reviewed:** `feature/combat-turns`, working tree based on `5230cf8`, including helmet progression and loot tuning<br>
+**Code reviewed:** `feature/new-items`, working tree based on `34b9813`, including turn counting, lamp fuel, and conditional fuel generation<br>
 **Package:** `paydirt` 0.1.0, Rust edition 2024
 
 ## Project overview
@@ -67,13 +67,13 @@ Enemies receive stable, floor-local `EnemyId` values that are never reused withi
 
 ## Visibility and exploration
 
-Each map tile records current visibility and persistent exploration memory. Visibility is recalculated at floor entry, after movement, and after opening a door. Previously seen terrain remains available for rendering.
+Each map tile records current visibility and persistent exploration memory. Visibility is recalculated at floor entry and after every spent action, including waits and inventory attempts. Previously seen terrain remains available for rendering.
 
-Player sight reaches 10 tiles in each direction (Chebyshev distance), derived from half the maximum generated room width of 20 tiles. The radius follows the generator’s room-size limits rather than a separate fixed tuning value. Previously seen terrain remains remembered beyond that range.
+Player sight uses a fuel-dependent Chebyshev radius: linearly from 10 to 5 tiles as fuel decreases from 200 to 50, then from 5 to 1 as fuel decreases to zero. Tile centers outside the continuous radius are hidden. Game refreshes sight after burning fuel on every spent action, preventing movement or doors from revealing terrain at a stale radius. Previously seen terrain remains remembered beyond that range.
 
 Walls, rocks, and closed doors block sight; water, floor, stairs, and open doors transmit it. The first opaque tile remains visible. All eight neighboring cells are visible, while more distant rays cannot pass diagonally through blocked corners. Exposed diagonal wall boundaries are revealed from visible transparent tiles immediately toward the viewer. This fixes missing boundary walls when viewing an open room without revealing terrain behind obstacles. The player’s range cap also applies to these boundary walls.
 
-`Map::has_line_of_sight()` remains a terrain geometry query without the player’s range cap. Player visibility applies the cap in `update_visibility()`, while enemy detection retains its own species range.
+`Map::has_line_of_sight()` remains a terrain geometry query without the player’s lamp range cap. Player visibility applies the cap in `update_visibility()`, while enemy detection retains its own species range.
 
 Entities appear only in current sight. Remembered terrain does not reveal enemies or items that have moved outside visibility. Rendering applies an additional visibility check even when callers supply custom entity views. Drawing order is terrain, ground items, enemies, and player.
 
@@ -139,6 +139,7 @@ Detection requires range and terrain line of sight. Healthy detected enemies app
 | Steel Helmet | +4 defense; first available at depth 9 (catalog level 10). |
 | Pete's Helmet | +5 defense; first available at depth 12 (catalog level 13). |
 | Health Potion | Restores up to 12 HP, capped at maximum health. |
+| Lamp Fuel | Refills the lamp to 200; separate guaranteed floor supply, excluded from random loot and drops. |
 
 New weapons roll once when created as starting equipment, generated floor loot, or enemy drops. With `tier = min(depth / 4, 1000)`, the added bonus is `tier + random(0..=2 + tier)`, inclusive. A Pickaxe therefore starts at 2d4 plus zero to two damage at depth zero; a Shovel adds its base +2 as well. The cap keeps scaling bounded at extreme depths. Attack dice continue to roll independently on each hit, while transfers and descent preserve the original weapon’s rolled data.
 
@@ -147,6 +148,34 @@ Pickaxe, Shovel, Health Potion, and Rusty Helmet remain catalog level one. Floor
 Inventory rows distinguish duplicate carried copies and equipped slots. Pickup takes the first ground item on the player’s tile after checking capacity. Equipping swaps the selected carried item into its slot and returns displaced equipment to the freed pack space. Unequipping checks capacity before changing ownership. Players can drop carried or equipped items directly onto their tile.
 
 Successful potion use consumes exactly the selected copy. Full-health use retains the potion and still spends a turn. Failed transfers preserve ownership. Combat remains active during item attempts in the inventory screen, including attempts that fail.
+
+## Turn counter and lamp lifecycle
+
+Player Stats starts with zero elapsed turns and 200 lamp fuel. Each spent action
+increments the saturating counter and reduces fuel by one, including rejected
+attempts and lethal actions. Accepted descent counts once through its special
+transition path. Menus, help, pause, selection, and history remain free. At zero
+fuel, the player retains one-tile sight and can continue playing.
+
+Lamp Fuel uses the existing pickup and consumable-use controls and shares the
+five-consumable capacity. Successful use consumes the selected copy, restores
+fuel to 200, and then burns one for the action (199 remains). A full lamp keeps
+the item on rejection, while the attempt still spends a turn. Health and elapsed
+turns are preserved. Both gameplay and inventory status show turns and fuel.
+
+Generation reserves one extra fuel spawn before ordinary population placement,
+with no random fuel spawns or enemy fuel drops. The starting floor always has
+one. On descent, Game requests one if fuel was below 150 before the action;
+exactly 150 or more requests none. Fuel normally uses a distinct eligible tile
+outside the starting room; a floor without eligible tiles uses the safe player
+start to preserve the guarantee. Regular item targets are unchanged, with fuel
+additional to them. Survivors retain the counter and remaining fuel on descent;
+new sessions reset both.
+
+The historical SDD PDF remains the original reviewed design. Its contracts 6–7,
+18–20 now additionally correspond to these Stats fields, fuel use, the appended
+catalog index 8, conditional generation, and lamp-aware borrowed status views.
+The README documents the current interfaces pending the formal SDD review.
 
 ## Progression, death, and message history
 
@@ -176,11 +205,13 @@ cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings
 ```
 
-The test suite passed **205 tests**: 202 library tests, two executable tests, and one documentation test. Coverage includes generation reproducibility and connectivity, spawn restrictions, visibility, AI decisions, dice calculations, drops, effect timing, inventory ownership, rejected actions, descent and overflow, death handling, restart, help, configuration parsing, and rendering across small/resized test backends.
+The test suite passed **211 tests**: 208 library tests, two executable tests, and one documentation test. Coverage includes generation reproducibility and connectivity, spawn restrictions, visibility, AI decisions, dice calculations, drops, effect timing, inventory ownership, rejected actions, descent and overflow, death handling, restart, help, configuration parsing, and rendering across small/resized test backends.
 
-Three new visibility regressions cover diagonal boundary walls in square and rectangular rooms, hidden terrain behind diagonal walls, and the vision-range boundary for floors and walls with exploration memory retained after moving away. Movement and door-opening tests now verify visibility against both terrain line of sight and the player’s range cap.
+Three new visibility regressions cover diagonal boundary walls in square and rectangular rooms, hidden terrain behind diagonal walls, and the vision-range boundary for floors and walls with exploration memory retained after moving away. Movement and door-opening tests now verify visibility against both terrain line of sight and the player’s lamp range cap.
 
 Six additional weapon/effect regressions cover deterministic depth-scaled rolls and rare-effect distribution, Bleed and Weakness duration, Weakness damage reduction on the hit turn, Lightning splash and kill handling, rolled-weapon ownership through transfers, and damage-text colors. Launcher assertions now accommodate randomized starting weapon labels and wrapping effect names.
+
+Six lamp regressions cover the fuel curve and saturation, spent/free actions and reset, the pre-descent 150 threshold, full-lamp rejection and refueling ownership, exact conditional generation across depths and seeds, and shrinking visibility with exploration memory retained.
 
 Three helmet regressions verify catalog names, stats and equipped defense, depth unlock boundaries and floor-loot rarity, and equipment-drop rarity across all helmet tiers and maximum depth. Existing inventory tests now expect Rusty Helmet.
 
@@ -192,14 +223,14 @@ Project standards call for default Rust formatting, Clippy checks, composition, 
 
 The detailed task list is maintained in [TODO.html](../TODO.html). Remaining work is to:
 
-- Review the expanded eight-item catalog and decide whether further content or consumable behavior belongs in this increment. Shovel, weapon rolls, Bleed, Weakness, and Lightning, and five helmet tiers are implemented.
+- Review the expanded nine-item catalog and decide whether further content or consumable behavior belongs in this increment. Shovel, weapon rolls, Bleed, Weakness, and Lightning, and five helmet tiers are implemented.
 - Playtest early and deeper floors and tune combat, depth-scaled weapon bonuses, the 1% effect chance, effect power/duration/radius, helmet unlock depths and rarity, population, healing, and drops using recorded results.
 - Review existing tests for gaps across a complete session and add focused deterministic integration coverage where needed.
 - Record a full keyboard playthrough, configuration/theme checks, resize behavior, and terminal cleanup on normal and error exits.
 - Reconcile older SDD signatures and ownership descriptions with the current implementation, then refresh developer documentation.
 - Run checks after final changes and complete the project’s review, demonstration, and baseline audit process.
 
-Current scope has local enemy movement, fixed species statistics, a eight-item catalog, in-memory sessions, and downward progression without an implemented victory condition. Broader pathfinding, persistence, or a victory condition would require a scope decision rather than being assumed requirements.
+Current scope has local enemy movement, fixed species statistics, a nine-item catalog, in-memory sessions, and downward progression without an implemented victory condition. Broader pathfinding, persistence, or a victory condition would require a scope decision rather than being assumed requirements.
 
 ## Project references
 

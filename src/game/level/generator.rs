@@ -50,6 +50,12 @@ impl LevelGenerator {
     /// Builds a connected level with a safe start, and distant stairs.
     /// Game supplies the depth and RNG; generation retains no session state.
     pub fn generate_level(depth: u32, rng: &mut impl Rng) -> Level {
+        Self::generate_level_with_fuel(depth, true, rng)
+    }
+
+    /// Generates a floor with exactly one extra fuel supply when requested.
+    /// Game decides this from fuel remaining before the descent turn is spent.
+    pub fn generate_level_with_fuel(depth: u32, spawn_fuel: bool, rng: &mut impl Rng) -> Level {
         let (mut map, starting_room) = generate_layout(depth, rng);
         let player_start = starting_room.center();
         let stairs_down = explore(&map, player_start).0;
@@ -61,6 +67,26 @@ impl LevelGenerator {
             stairs_down,
             starting_room.positions(),
         );
+        if spawn_fuel {
+            let candidates: Vec<_> = level
+                .get_map()
+                .positions()
+                .filter(|&position| level.is_spawn_tile(position))
+                .collect();
+            // A single-room floor may have no ordinary spawn tile. Keep the
+            // guaranteed supply on its safe start in that exceptional case.
+            let position = if candidates.is_empty() {
+                player_start
+            } else {
+                candidates[rng.random_range(0..candidates.len())]
+            };
+            level
+                .insert_ground_item(
+                    crate::game::item::get_item(crate::game::item::LAMP_FUEL_INDEX),
+                    position,
+                )
+                .expect("fuel spawn tile is walkable");
+        }
         populate(&mut level, rng);
         level
     }
@@ -557,6 +583,33 @@ mod tests {
     use rand::rngs::StdRng;
     use std::collections::HashSet;
 
+    #[test]
+    fn fuel_is_exactly_one_extra_spawn_and_never_random_loot() {
+        for depth in [0, 3, 12, u32::MAX] {
+            for seed in 0..40 {
+                for spawn in [false, true] {
+                    let level = LevelGenerator::generate_level_with_fuel(
+                        depth,
+                        spawn,
+                        &mut StdRng::seed_from_u64(seed),
+                    );
+                    assert_eq!(
+                        level
+                            .ground_items()
+                            .iter()
+                            .filter(|entry| entry.item.is_lamp_fuel())
+                            .count(),
+                        usize::from(spawn)
+                    );
+                    assert_eq!(
+                        level.ground_items().len(),
+                        target_counts(depth).1 + usize::from(spawn)
+                    );
+                }
+            }
+        }
+    }
+
     ////////////////////////////////////////////////////////////////////////////////
     // POPULATION TESTS
     ////////////////////////////////////////////////////////////////////////////////
@@ -602,7 +655,7 @@ mod tests {
                 }
                 let (enemies, items) = target_counts(depth);
                 assert_eq!(first.enemies().count(), enemies);
-                assert_eq!(first.ground_items().len(), items);
+                assert_eq!(first.ground_items().len(), items + 1);
             }
         }
     }

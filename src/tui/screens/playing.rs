@@ -36,7 +36,7 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
         (map, status)
     } else if has_status && content.height >= 10 {
         let [map, status] =
-            Layout::vertical([Constraint::Min(3), Constraint::Length(5)]).areas(content);
+            Layout::vertical([Constraint::Min(3), Constraint::Length(6)]).areas(content);
         (map, status)
     } else {
         (content, Rect::default())
@@ -150,6 +150,13 @@ pub fn draw_status(frame: &mut Frame, area: Rect, status: &StatusView<'_>, theme
     }
     let lines = vec![
         Line::from(Span::styled(health, health_style)),
+        Line::from(
+            status
+                .turns_and_fuel
+                .map_or_else(String::new, |(turns, fuel)| {
+                    format!("Turns: {turns} / Lamp: {fuel}/200")
+                }),
+        ),
         Line::from(format!("Effects: {effects}")),
         Line::from(equipment),
     ];

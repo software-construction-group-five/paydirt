@@ -80,11 +80,49 @@ spends no turns and consumes no RNG. On short terminals, history gets priority
 over the summary. Returning to menu or starting a new session clears selections,
 scroll position, history, and summary.
 
+## Turns, lamp fuel, and refueling
+
+Player `Stats` records elapsed spent turns and lamp fuel. New sessions start at
+zero turns with **200 turns of fuel**. Every spent action increments the counter
+and burns one fuel, including blocked moves, failed inventory attempts, lethal
+actions, and accepted or rejected descent. Menus, selection, help, pause, and
+history scrolling spend none. Empty lamps stay at zero without stopping play.
+The status panel shows elapsed turns and remaining fuel in play and inventory.
+
+The lamp's Chebyshev sight radius decreases linearly in two segments:
+
+| Fuel remaining | Sight radius |
+| ---: | ---: |
+| 200 | 10 |
+| 50 | 5 |
+| 0 | 1 |
+
+For fuel `f >= 50`, radius is `5 + (f - 50) / 30`; below 50 it is
+`1 + 4 * f / 50`. Tile centers must fall within this continuous radius, so the
+visible tile boundary changes in whole-tile steps. Sight refreshes after every
+spent action using the remaining fuel, including while stationary. Exploration
+memory persists; enemy detection keeps its own range and terrain line of sight.
+
+**Lamp Fuel** is a consumable: pick it up with `g`, select it in inventory, and
+press `u` to refill to 200. It shares the five-consumable carried limit with
+potions. A full lamp rejects use and keeps the fuel; the attempt still spends a
+turn. Successful use burns its action's fuel after refilling, leaving **199**.
+Refueling preserves health and does not reset elapsed turns.
+
+Every new game generates **exactly one extra fuel item**. On descent, generate
+one only if fuel is **below 150 before spending the descent turn**; with 150 or
+more, generate none. Fuel is separate from ordinary random loot and enemy drops.
+It reserves a distinct eligible tile before ordinary populations are placed; if
+no eligible tile exists, it falls back to the walkable player start. Accepted
+descent preserves remaining fuel and the turn counter, and lethal transition
+effects prevent generation as before.
+
 ## Level generation
 
 `LevelGenerator::generate_level(depth: u32, rng: &mut impl Rng) -> Level` returns
-an owned dungeon floor. Game supplies the RNG and decides when to request a new
-floor.
+an owned dungeon floor with one extra fuel item. Game supplies the RNG and decides
+when to request a new floor. For descent it calls
+`generate_level_with_fuel(depth, spawn_fuel, rng)` with the threshold decision.
 
 - `get_map()` and `is_walkable(position)` provide terrain access. Map dimensions
   are read through `width()`/`height()`; `positions()` and `neighbors(position)`
@@ -132,7 +170,7 @@ Difficulty eventually approaches the strongest existing species; stats do not sc
 Profiles and placement rules live in `src/game/level/generator.rs`.
 
 Each floor targets `4 + min(depth, 16)` enemies and
-`3 + min(depth / 3, 5)` items. Candidates are shuffled once and consumed without
+`3 + min(depth / 3, 5)` ordinary items, plus the conditional fuel supply. Candidates are shuffled once and consumed without
 replacement. On cramped floors, reserve up to half the available tiles for items,
 then place as many enemies and items as fit. Placement terminates with no retries.
 
@@ -140,7 +178,8 @@ Items come from eligible entries exposed by `item::catalog()`. Floor loot has a
 5% helmet chance, independent of the number of unlocked helmets. Otherwise it
 chooses uniformly among Pickaxe, Shovel, and Health Potion. Only the highest
 unlocked helmet tier is selected; weaker helmets stop spawning when an upgrade
-unlocks. The eight-item catalog contains those three items and five helmets.
+unlocks. The nine-item catalog contains those three items, five helmets, and Lamp Fuel.
+Fuel never enters this random selection.
 
 | Helmet | Armor bonus | First dungeon depth | Catalog level |
 | --- | ---: | ---: | ---: |
@@ -168,12 +207,13 @@ later indices, so callers must rebuild selections after a removal.
 Each `Tile` owns `seen` (persistent exploration memory) and `visible` (current
 line of sight), both initially false. `seen` replaces the unused `explored` field.
 The launcher-facing Game controller initializes sight at the player start on New
-Game. Call `Level::update_visibility(player_position)` after movement, floor entry,
-or sight-blocking terrain changes. Updating sight spends no turn and never clears
+Game. Game calls `Level::update_visibility_with_radius(player_position, radius)` after
+every spent action and on floor entry. `update_visibility(position)` remains a
+full-radius helper for independent callers. Updating sight spends no turn and never clears
 previously seen tiles. Invalid origins clear current visibility but preserve memory.
 
-Player sight reaches 10 tiles in each direction (Chebyshev distance), half the
-maximum generated room width. Previously seen terrain remains remembered beyond
+Player sight reaches up to 10 tiles in each direction (Chebyshev distance),
+limited by the current lamp fuel as described above. Previously seen terrain remains remembered beyond
 that range. Walls, rocks, and closed doors block sight; water,
 floor, stairs, and open doors transmit it. The first opaque tile remains visible.
 All eight adjacent tiles are visible regardless of blockage, revealing room corners.

@@ -299,9 +299,20 @@ impl Game {
         };
 
         if result == TurnResult::Spent {
+            self.player.as_mut().unwrap().spend_turn();
+            self.refresh_visibility();
             self.advance_turn();
         }
         result
+    }
+
+    fn refresh_visibility(&mut self) {
+        if let (Some(player), Some(level)) = (&self.player, &mut self.level) {
+            level.update_visibility_with_radius(
+                player.get_position(),
+                player.get_stats().vision_radius(),
+            );
+        }
     }
 
     fn close_help(&mut self) {
@@ -347,12 +358,21 @@ impl Game {
                     .unwrap()
                     .unequip(slot)
                     .map(|_| format!("You unequip {name}.")),
-                (Action::UseItem, Some((InventorySelection::Carried(index), name))) => self
-                    .player
-                    .as_mut()
-                    .unwrap()
-                    .use_carried(index)
-                    .map(|healed| format!("You use {name} and restore {healed} HP.")),
+                (Action::UseItem, Some((InventorySelection::Carried(index), name))) => {
+                    let fuel =
+                        self.player.as_ref().unwrap().get_inventory().items()[index].is_lamp_fuel();
+                    self.player
+                        .as_mut()
+                        .unwrap()
+                        .use_carried(index)
+                        .map(|healed| {
+                            if fuel {
+                                format!("You refuel your lamp by {healed} turns.")
+                            } else {
+                                format!("You use {name} and restore {healed} HP.")
+                            }
+                        })
+                }
                 (Action::DropItem, Some((selection, name))) => self
                     .drop_item(selection)
                     .map(|_| format!("You drop {name}.")),
@@ -427,16 +447,22 @@ impl Game {
                 .add_message("You cannot descend any farther.".to_owned());
             return false;
         };
+        let spawn_fuel = player.get_stats().lamp_fuel() < 150;
+        self.player.as_mut().unwrap().spend_turn();
+        self.refresh_visibility();
         if self.advance_player_effects() {
             return true;
         }
-        let mut level = LevelGenerator::generate_level(depth, &mut self.rng);
+        let mut level = LevelGenerator::generate_level_with_fuel(depth, spawn_fuel, &mut self.rng);
         let start = level.player_start();
         self.player
             .as_mut()
             .expect("active player survives descent")
             .set_position(start);
-        level.update_visibility(start);
+        level.update_visibility_with_radius(
+            start,
+            self.player.as_ref().unwrap().get_stats().vision_radius(),
+        );
         self.level = Some(level);
         self.log
             .add_message(format!("You descend to depth {depth}."));
@@ -670,8 +696,7 @@ impl Game {
         };
         // Bumping a closed door opens it; walking through takes another turn
         if level.open_door(target) {
-            // An open door no longer blocks sight, so refresh what the player sees
-            level.update_visibility(player.get_position());
+            // The shared turn boundary refreshes sight after burning fuel.
             return TurnResult::Spent;
         }
         if !level.is_walkable(target) {
@@ -682,7 +707,6 @@ impl Game {
             return TurnResult::Spent;
         }
         player.set_position(target);
-        level.update_visibility(target);
         TurnResult::Spent
     }
 
@@ -822,6 +846,138 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lamp_counts_spent_actions_refuels_and_resets() {
+        let mut game = Game::new();
+        game.rng = StdRng::seed_from_u64(123);
+        game.process_action(&Action::Confirm);
+        assert_eq!(
+            game.level()
+                .unwrap()
+                .ground_items()
+                .iter()
+                .filter(|entry| entry.item.is_lamp_fuel())
+                .count(),
+            1
+        );
+        let ids: Vec<_> = game.level().unwrap().enemies().map(|(id, _)| id).collect();
+        for id in ids {
+            game.level.as_mut().unwrap().remove_enemy(id);
+        }
+        for action in [
+            Action::Help,
+            Action::Help,
+            Action::Pause,
+            Action::Pause,
+            Action::OpenInventory,
+            Action::MoveDown,
+            Action::Back,
+        ] {
+            assert_eq!(game.process_action(&action), TurnResult::NotSpent);
+        }
+        assert_eq!(game.player().unwrap().get_stats().turns(), 0);
+        // A rejected pickup still burns fuel, including with inventory open.
+        game.process_action(&Action::Pickup);
+        game.process_action(&Action::OpenInventory);
+        game.player
+            .as_mut()
+            .unwrap()
+            .receive_item(item::get_item(item::LAMP_FUEL_INDEX))
+            .unwrap();
+        game.process_action(&Action::UseItem);
+        assert_eq!(game.player().unwrap().get_stats().turns(), 2);
+        assert_eq!(game.player().unwrap().get_stats().lamp_fuel(), 199);
+        assert!(game.player().unwrap().get_inventory().items().is_empty());
+        game.process_action(&Action::Back);
+        for _ in 0..205 {
+            game.process_action(&Action::Wait);
+        }
+        let player = game.player().unwrap();
+        assert_eq!(player.get_stats().lamp_fuel(), 0);
+        assert!(
+            game.level().unwrap().get_map().positions().all(|p| !game
+                .level()
+                .unwrap()
+                .get_map()
+                .is_visible(p)
+                || p.distance(player.get_position()) <= 1)
+        );
+        // Movement with an empty lamp must not briefly reveal a larger radius.
+        game.level = Some(LevelGenerator::generate_level_with_fuel(
+            0,
+            false,
+            &mut game.rng,
+        ));
+        let start = game.level().unwrap().player_start();
+        game.player.as_mut().unwrap().set_position(start);
+        game.refresh_visibility();
+        let seen: Vec<_> = game
+            .level()
+            .unwrap()
+            .get_map()
+            .positions()
+            .map(|p| game.level().unwrap().get_map().get(p).unwrap().seen)
+            .collect();
+        let action = [
+            (Action::MoveLeft, -1, 0),
+            (Action::MoveRight, 1, 0),
+            (Action::MoveUp, 0, -1),
+            (Action::MoveDown, 0, 1),
+        ]
+        .into_iter()
+        .find(|(_, dx, dy)| {
+            start
+                .offset(*dx, *dy)
+                .is_some_and(|p| game.level().unwrap().is_walkable(p))
+        })
+        .unwrap()
+        .0;
+        game.process_action(&action);
+        let map = game.level().unwrap().get_map();
+        assert!(map.positions().zip(seen).all(|(p, before)| {
+            let tile = map.get(p).unwrap();
+            tile.seen == (before || tile.visible)
+        }));
+        game.process_action(&Action::Pause);
+        game.process_action(&Action::Back);
+        game.process_action(&Action::Confirm);
+        assert_eq!(game.player().unwrap().get_stats().turns(), 0);
+        assert_eq!(game.player().unwrap().get_stats().lamp_fuel(), 200);
+    }
+
+    #[test]
+    fn descent_fuel_threshold_uses_fuel_before_spending_the_turn() {
+        for fuel in [151_u32, 150, 149, 50, 0] {
+            let mut game = Game::new();
+            game.process_action(&Action::Confirm);
+            let stairs = game.level().unwrap().stairs_down();
+            let player = game.player.as_mut().unwrap();
+            player.set_position(stairs);
+            for _ in fuel..200 {
+                player.spend_turn();
+            }
+            game.process_action(&Action::Descend);
+            assert_eq!(game.level().unwrap().depth(), 1);
+            assert_eq!(
+                game.level()
+                    .unwrap()
+                    .ground_items()
+                    .iter()
+                    .filter(|entry| entry.item.is_lamp_fuel())
+                    .count(),
+                usize::from(fuel < 150)
+            );
+            assert_eq!(
+                game.player().unwrap().get_stats().turns(),
+                u64::from(201 - fuel)
+            );
+            assert_eq!(
+                game.player().unwrap().get_stats().lamp_fuel(),
+                fuel.saturating_sub(1)
+            );
+        }
+    }
+
+    #[test]
     fn lightning_splashes_after_a_lethal_hit_without_attaching_a_dot() {
         let (mut game, primary, action) = combat_game(
             150,
@@ -946,7 +1102,7 @@ mod tests {
             .unwrap();
         game.rng = StdRng::seed_from_u64(901);
         let mut expected_rng = StdRng::seed_from_u64(901);
-        let expected = LevelGenerator::generate_level(1, &mut expected_rng);
+        let expected = LevelGenerator::generate_level_with_fuel(1, false, &mut expected_rng);
         assert_eq!(game.process_action(&Action::Descend), TurnResult::Spent);
         let player = game.player().unwrap();
         let level = game.level().unwrap();
@@ -1414,6 +1570,8 @@ mod tests {
         assert_eq!(game.summary(), Some(&summary));
         assert_eq!(game.log.history(), history);
         assert_eq!(game.player().unwrap().get_stats().hp(), 0);
+        assert_eq!(game.player().unwrap().get_stats().turns(), 1);
+        assert_eq!(game.player().unwrap().get_stats().lamp_fuel(), 199);
         assert_eq!(
             game.rng.random::<u64>(),
             StdRng::seed_from_u64(7).random::<u64>()
@@ -1497,6 +1655,8 @@ mod tests {
         assert_eq!(game.process_action(&Action::MoveUp), TurnResult::NotSpent);
         assert_eq!(game.summary(), Some(&summary));
         assert_eq!(game.message_log().history().len(), 2);
+        assert_eq!(game.player().unwrap().get_stats().turns(), 1);
+        assert_eq!(game.player().unwrap().get_stats().lamp_fuel(), 199);
         game.process_action(&Action::Confirm);
         assert!(game.summary().is_none());
         assert!(game.message_log().history().is_empty());
@@ -2164,7 +2324,8 @@ mod tests {
             let map = game.level().unwrap().get_map();
             assert!(map.positions().all(|position| {
                 map.is_visible(position)
-                    == (expected.distance(position) <= level::map::PLAYER_VISION_RADIUS
+                    == (expected.distance(position) as f64
+                        <= game.player().unwrap().get_stats().vision_radius()
                         && map.has_line_of_sight(expected, position))
             }));
 
@@ -2210,8 +2371,8 @@ mod tests {
                             let tile = level.get_map().get(position).unwrap();
                             tile.seen == seen
                                 && tile.visible
-                                    == (start.distance(position)
-                                        <= level::map::PLAYER_VISION_RADIUS
+                                    == (start.distance(position) as f64
+                                        <= game.player().unwrap().get_stats().vision_radius()
                                         && level.get_map().has_line_of_sight(start, position))
                         })
                 );
@@ -2347,7 +2508,8 @@ mod tests {
             let map = game.level().unwrap().get_map();
             assert!(map.positions().all(|position| {
                 map.is_visible(position)
-                    == (beside.distance(position) <= level::map::PLAYER_VISION_RADIUS
+                    == (beside.distance(position) as f64
+                        <= game.player().unwrap().get_stats().vision_radius()
                         && map.has_line_of_sight(beside, position))
             }));
             assert!(seen.iter().all(|&position| map.get(position).unwrap().seen));

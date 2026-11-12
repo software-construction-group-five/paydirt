@@ -141,11 +141,17 @@ impl Map {
     /// terrain changes, before presenting state. An invalid origin clears current
     /// visibility, preserves memory, and returns false.
     pub fn update_visibility(&mut self, origin: Position) -> bool {
+        self.update_visibility_with_radius(origin, PLAYER_VISION_RADIUS as f64)
+    }
+
+    /// Refreshes exploration with the player's current lamp radius.
+    /// Terrain line of sight remains independent of lamp fuel for enemy AI.
+    pub fn update_visibility_with_radius(&mut self, origin: Position, radius: f64) -> bool {
         // Rays read terrain only, so flags can be updated in place without
         // allocating a second grid for every movement or door interaction.
         for index in 0..self.tiles.len() {
             let position = Position::new(index % self.width, index / self.width);
-            let visible = origin.distance(position) <= PLAYER_VISION_RADIUS
+            let visible = origin.distance(position) as f64 <= radius
                 && self.has_line_of_sight(origin, position);
             let tile = &mut self.tiles[index];
             tile.visible = visible;
@@ -244,6 +250,20 @@ impl Map {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shrinking_lamp_hides_entities_without_revealing_or_forgetting_terrain() {
+        let mut map = open_map(30, 30);
+        let origin = Position::new(15, 15);
+        map.update_visibility_with_radius(origin, 5.0);
+        assert!(map.is_visible(Position::new(20, 15)));
+        assert!(!map.get(Position::new(21, 15)).unwrap().seen);
+        map.update_visibility_with_radius(origin, 1.0);
+        assert!(!map.is_visible(Position::new(20, 15)));
+        assert!(map.get(Position::new(20, 15)).unwrap().seen);
+        assert!(map.is_visible(Position::new(16, 16)));
+        assert!(map.has_line_of_sight(origin, Position::new(25, 15)));
+    }
 
     fn open_map(width: usize, height: usize) -> Map {
         let mut map = Map::new(width, height);

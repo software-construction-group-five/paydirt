@@ -112,12 +112,15 @@ impl StatusEffect {
 }
 
 /// Health, combat values, and at most three active status effects.
+/// Player sessions also advance the turn counter and lamp stored here.
 pub struct Stats {
     hp: i32,
     max_hp: i32,
     attack: i32,
     defense: i32,
     status_effects: Vec<StatusEffect>,
+    turns: u64,
+    lamp_fuel: u32,
 }
 
 impl Stats {
@@ -132,6 +135,41 @@ impl Stats {
             attack,
             defense,
             status_effects: Vec::new(),
+            turns: 0,
+            lamp_fuel: 200,
+        }
+    }
+
+    /// Number of spent player turns in this session, including lethal actions.
+    pub fn turns(&self) -> u64 {
+        self.turns
+    }
+
+    /// Remaining lamp fuel, measured in turns (maximum 200).
+    pub fn lamp_fuel(&self) -> u32 {
+        self.lamp_fuel
+    }
+
+    /// Counts one spent player action and burns one unit of lamp fuel.
+    pub fn spend_turn(&mut self) {
+        self.turns = self.turns.saturating_add(1);
+        self.lamp_fuel = self.lamp_fuel.saturating_sub(1);
+    }
+
+    /// Refills the lamp to 200 turns and returns fuel restored.
+    pub fn refuel_lamp(&mut self) -> u32 {
+        let restored = 200 - self.lamp_fuel;
+        self.lamp_fuel = 200;
+        restored
+    }
+
+    /// Piecewise linear Chebyshev sight radius: 200→10, 50→5, 0→1.
+    /// Tile centers outside this continuous radius are hidden.
+    pub fn vision_radius(&self) -> f64 {
+        if self.lamp_fuel >= 50 {
+            5.0 + f64::from(self.lamp_fuel - 50) / 30.0
+        } else {
+            1.0 + f64::from(self.lamp_fuel) * 4.0 / 50.0
         }
     }
 
@@ -210,6 +248,36 @@ impl Stats {
 #[cfg(test)]
 mod tests {
     use super::{Stats, StatusEffect};
+
+    #[test]
+    fn lamp_curve_turn_count_and_empty_lamp_are_bounded() {
+        let mut stats = stats();
+        for spent in 0..=220 {
+            assert_eq!(stats.turns(), spent);
+            assert_eq!(stats.lamp_fuel(), 200_u32.saturating_sub(spent as u32));
+            let radius = stats.vision_radius();
+            if let Some(expected) = match spent {
+                0 => Some(10.0),
+                75 => Some(7.5),
+                150 => Some(5.0),
+                175 => Some(3.0),
+                200..=220 => Some(1.0),
+                _ => None,
+            } {
+                assert!((radius - expected).abs() < 1e-10);
+            }
+            let previous = radius;
+            stats.spend_turn();
+            assert!(stats.vision_radius() <= previous);
+            assert!(previous - stats.vision_radius() <= 0.081);
+        }
+        assert_eq!(stats.refuel_lamp(), 200);
+        assert_eq!(stats.vision_radius(), 10.0);
+        assert_eq!(stats.refuel_lamp(), 0);
+        stats.turns = u64::MAX;
+        stats.spend_turn();
+        assert_eq!(stats.turns(), u64::MAX);
+    }
 
     fn stats() -> Stats {
         Stats::new(100, 15, 5)

@@ -16,7 +16,7 @@ use ratatui::{
 pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
     let body = frame.area();
     let status_height = if view.status.health.is_some() && body.height >= 12 {
-        5
+        6
     } else {
         0
     };

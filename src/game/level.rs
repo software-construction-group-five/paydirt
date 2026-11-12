@@ -132,6 +132,11 @@ impl Level {
         self.map.update_visibility(player_position)
     }
 
+    /// Refreshes player sight using the current lamp radius, retaining exploration.
+    pub fn update_visibility_with_radius(&mut self, position: Position, radius: f64) -> bool {
+        self.map.update_visibility_with_radius(position, radius)
+    }
+
     /// Returns currently visible enemies, using their current tile's visibility.
     /// Seen terrain alone does not reveal entities; IDs remain floor-local.
     pub fn visible_enemies(&self) -> impl Iterator<Item = (EnemyId, &Enemy)> {

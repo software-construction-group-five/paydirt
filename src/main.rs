@@ -123,6 +123,8 @@ fn with_view<R>(
         })
         .collect();
     let status = StatusView {
+        turns_and_fuel: player
+            .map(|player| (player.get_stats().turns(), player.get_stats().lamp_fuel())),
         health: player.map(|player| (player.get_stats().hp(), player.get_stats().max_hp())),
         equipment: &equipment_names,
         effects: &effect_names,
@@ -182,6 +184,13 @@ mod tests {
             assert!(view.inventory[0].equipped);
             assert_eq!(view.selected, 0);
             assert_eq!(view.status.health, Some((40, 40)));
+            assert_eq!(
+                view.status.turns_and_fuel,
+                Some((
+                    game.player().unwrap().get_stats().turns(),
+                    game.player().unwrap().get_stats().lamp_fuel()
+                ))
+            );
         });
     }
 
@@ -204,6 +213,7 @@ mod tests {
             .collect();
         assert!(screen.contains('@'));
         assert!(screen.contains("Health: 40 / 40"));
+        assert!(screen.contains("Turns: 0 / Lamp: 200/200"));
         // Rare effect names may wrap inside the status panel.
         assert!(screen.contains("Pickaxe (2d4"));
 
@@ -237,6 +247,13 @@ mod tests {
                         .all(|entity| { level.get_map().is_visible(entity.position) })
                 );
                 assert_eq!(view.status.health, Some((40, 40)));
+                assert_eq!(
+                    view.status.turns_and_fuel,
+                    Some((
+                        game.player().unwrap().get_stats().turns(),
+                        game.player().unwrap().get_stats().lamp_fuel()
+                    ))
+                );
                 terminal.draw(|frame| renderer.render(frame, game.screen(), view))
             })
             .unwrap();
