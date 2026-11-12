@@ -131,9 +131,9 @@ The TUI does not construct levels, move players, validate movement, advance turn
 or decide screen transitions. The launcher calls `Renderer::enemy_entities()` and
 `item_entities()` to build visible, themed entries and borrows those vectors in
 `LevelView`. The renderer also checks tile visibility to prevent hidden entities
-from leaking through custom display data. Until active-player movement is connected,
-`LevelView::focus` centers the camera on the floor start without drawing a player.
-A supplied player position takes precedence over that camera focus.
+from leaking through custom display data. The launcher supplies the active player
+position for drawing and camera focus.
+`LevelView::focus` remains available as a fallback for views without a player.
 
 ## Level entity integration notes
 
@@ -149,11 +149,13 @@ older signatures; this branch uses the following concrete ownership rules:
 | Visibility | `seen` replaces the unused `explored` tile field. Refresh current sight before rendering; entities use their tile's current visibility. |
 | Presentation | Renderer consumes borrowed views and resolves themes without changing gameplay state. |
 
-The movement feature must create and own the Player, check player/enemy collisions,
-refresh sight after movement and door interactions, and replace the launcher's
-starting-position camera fallback with the active player's position. Combat remains
-responsible for damage, death removal, and turn timing. No gameplay turns are added
-by entity display or visibility queries.
+Game owns the Player and MessageLog, checks player/enemy collisions, and refreshes
+sight after movement and door interactions. The launcher supplies the active player
+position, health, and messages to the renderer. Bumping a closed door opens it
+without moving; entering it takes another action. Enemies currently block movement.
+Movement attempts, door opening, and waiting report a spent turn, including blocked
+attempts. Combat, enemy turn updates, and death removal remain unfinished. Entity
+display and visibility queries do not spend turns.
 
 Run `cargo fmt --check`, `cargo test --offline`, and
 `cargo clippy --offline --all-targets -- -D warnings` before review. In a terminal,

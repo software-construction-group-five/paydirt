@@ -122,5 +122,50 @@ mod tests {
             .collect();
         assert!(screen.contains('@'));
         assert!(screen.contains("Health: 100 / 100"));
+
+        let keybinds = Keybinds::parse(include_str!("../config/keybinds.toml")).unwrap();
+        for code in [
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyCode::Right,
+            crossterm::event::KeyCode::Down,
+            crossterm::event::KeyCode::Left,
+            crossterm::event::KeyCode::Char('.'),
+            crossterm::event::KeyCode::Esc,
+            crossterm::event::KeyCode::Enter,
+        ] {
+            let key = crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+            let action = keybinds.action(game.screen(), key).unwrap();
+            game.process_action(action);
+            let position = game.player().unwrap().get_position();
+            let level = game.level().unwrap();
+            let help = keybinds.help(game.screen());
+            with_view(&game, &renderer, &help, |view| {
+                let level_view = view.level.as_ref().unwrap();
+                assert_eq!(level_view.player, Some(position));
+                assert_eq!(level_view.focus, Some(position));
+                assert_eq!(level_view.enemies.len(), level.visible_enemies().count());
+                assert_eq!(level_view.items.len(), level.visible_ground_items().count());
+                assert!(
+                    level_view
+                        .enemies
+                        .iter()
+                        .chain(level_view.items)
+                        .all(|entity| { level.get_map().is_visible(entity.position) })
+                );
+                assert_eq!(view.status.health, Some((100, 100)));
+                terminal.draw(|frame| renderer.render(frame, game.screen(), view))
+            })
+            .unwrap();
+            assert_eq!(
+                terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .filter(|cell| cell.symbol() == "@")
+                    .count(),
+                1
+            );
+        }
     }
 }

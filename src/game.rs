@@ -243,6 +243,7 @@ mod tests {
     #[test]
     fn moves_only_onto_walkable_tiles() {
         let mut game = Game::new();
+        game.rng = StdRng::seed_from_u64(42);
         game.process_action(&Action::Confirm);
         let start = game.player().unwrap().get_position();
         for (action, dx, dy) in [
@@ -261,6 +262,50 @@ mod tests {
                 .unwrap_or(start);
             game.process_action(&action);
             assert_eq!(game.player().unwrap().get_position(), expected);
+            let map = game.level().unwrap().get_map();
+            assert!(map.positions().all(|position| {
+                map.is_visible(position) == map.has_line_of_sight(expected, position)
+            }));
+
+            if expected != start {
+                // Exercise the merge boundary: terrain permits this move, but
+                // Level's enemy occupancy must prevent the player entering it.
+                game.player.as_mut().unwrap().set_position(start);
+                game.level.as_mut().unwrap().update_visibility(start);
+                let enemy = enemy::Enemy::new(enemy::EnemyType::Slime, expected);
+                let id = game
+                    .level
+                    .as_mut()
+                    .unwrap()
+                    .insert_enemy(enemy)
+                    .ok()
+                    .unwrap();
+                let seen: Vec<_> = game
+                    .level()
+                    .unwrap()
+                    .get_map()
+                    .positions()
+                    .map(|position| game.level().unwrap().get_map().get(position).unwrap().seen)
+                    .collect();
+                assert_eq!(game.process_action(&action), TurnResult::Spent);
+                assert_eq!(game.player().unwrap().get_position(), start);
+                let level = game.level().unwrap();
+                assert_eq!(level.enemy_at(expected), Some(id));
+                assert_eq!(level.enemy(id).unwrap().stats().hp(), 5);
+                assert!(
+                    level
+                        .get_map()
+                        .positions()
+                        .zip(seen)
+                        .all(|(position, seen)| {
+                            let tile = level.get_map().get(position).unwrap();
+                            tile.seen == seen
+                                && tile.visible
+                                    == level.get_map().has_line_of_sight(start, position)
+                        })
+                );
+                game.level.as_mut().unwrap().remove_enemy(id);
+            }
         }
     }
 
@@ -325,8 +370,9 @@ mod tests {
     fn bumping_a_closed_door_opens_it_without_moving() {
         use level::map::TileType;
         // Not every floor has a door, so try new games until one does
-        for _ in 0..50 {
+        for seed in 0..50 {
             let mut game = Game::new();
+            game.rng = StdRng::seed_from_u64(seed);
             game.process_action(&Action::Confirm);
             let level = game.level().unwrap();
             let map = level.get_map();
@@ -343,18 +389,36 @@ mod tests {
                 .into_iter()
                 .find_map(|(action, dx, dy)| {
                     let beside = door.offset(dx, dy)?;
-                    level.is_walkable(beside).then_some((door, beside, action))
+                    (level.is_walkable(beside) && level.enemy_at(beside).is_none())
+                        .then_some((door, beside, action))
                 })
             });
             let Some((door, beside, action)) = found else {
                 continue;
             };
             game.player.as_mut().unwrap().set_position(beside);
+            game.level.as_mut().unwrap().update_visibility(beside);
+            let seen: Vec<_> = game
+                .level()
+                .unwrap()
+                .get_map()
+                .positions()
+                .filter(|&position| game.level().unwrap().get_map().get(position).unwrap().seen)
+                .collect();
             assert_eq!(game.process_action(&action), TurnResult::Spent);
             assert_eq!(game.player().unwrap().get_position(), beside);
             assert!(game.level().unwrap().is_walkable(door));
+            let map = game.level().unwrap().get_map();
+            assert!(map.positions().all(|position| {
+                map.is_visible(position) == map.has_line_of_sight(beside, position)
+            }));
+            assert!(seen.iter().all(|&position| map.get(position).unwrap().seen));
             game.process_action(&action);
             assert_eq!(game.player().unwrap().get_position(), door);
+            let map = game.level().unwrap().get_map();
+            assert!(map.positions().all(|position| {
+                map.is_visible(position) == map.has_line_of_sight(door, position)
+            }));
             return;
         }
         panic!("no closed door found in 50 generated levels");
