@@ -8,8 +8,9 @@ equipment modifiers, reusable weapon effects, enemy effect operations, and AI
 intent types are implemented. Phase 2 adds pure damage calculation and controlled
 enemy damage/effect updates through Level, reporting actual HP loss and death.
 Phase 3 connects player bump attacks, surviving-target weapon effects, defeat
-messages, immediate enemy removal, and rare equipment drops. Enemy decisions,
-turn scheduling, and game-over history controls remain unfinished.
+messages, immediate enemy removal, and rare equipment drops. PR12 adds enemy
+decisions and one enemy AI phase per spent action. Enemy damage, scheduled effect
+ticks, and game-over history controls remain unfinished.
 
 ## Theme configuration
 
@@ -131,6 +132,37 @@ rules on both gameplay and paused screens and does not update exploration itself
 Items render below enemies, and the player renders last when supplied. Multiple
 items on one tile render in storage order, with the last item on top.
 
+## Enemy AI (PR12 integration)
+
+After each spent action, Game snapshots enemy IDs in insertion order and applies
+one decision per living enemy. Moves, waits, bump attacks, door opening, and
+blocked attempts all trigger this phase. Pause, menus, and redraws do not.
+
+| Species | Detection range (Chebyshev tiles) | Flee below HP |
+| --- | ---: | ---: |
+| Slime | 3 | 0 |
+| Ghost | 6 | 25 |
+| Goblin | 5 | 40 |
+
+Detection requires both range and terrain line of sight from the enemy to the
+player. AI uses `Map::has_line_of_sight()`, including the eight-adjacent-tile
+exception, rather than the player's cached visibility or exploration memory.
+Walls, rocks, and closed doors block distant detection; water and open doors
+transmit sight. Losing range or sight returns an enemy to Idle, without pursuit
+memory. Opening a door can expose the player before that action's enemy phase.
+
+Detected healthy enemies approach; injured enemies flee. Healing above the
+exclusive threshold ends fleeing on the next decision. Enemies choose a legal
+cardinal step that improves Manhattan distance, trying left, right, up, then down
+for ties. If no improving step is legal, they wait. This is local movement, without
+pathfinding or door opening. Game revalidates terrain, occupancy, and the player's
+tile before moving. Attacks require cardinal adjacency; diagonal neighbors
+approach instead of requesting PR12's original diagonal attack.
+
+Enemy attack intents currently wait without applying damage. Automatic status
+effect ticks, player death handling, and full combat turn integration remain work
+for the next combat phases.
+
 ## TUI integration
 
 The application loads `Theme` and `Keybinds` before setting up the terminal. Resolve
@@ -175,8 +207,9 @@ tier (level no greater than saturating depth + 1). The current catalog only has
 level-one equipment. Entering a defeated enemy's tile takes another move.
 Movement attempts, door opening, and waiting report a spent turn, including blocked
 attempts. Enemies do not retaliate yet, and status effects do not tick automatically;
-the shared turn loop remains unfinished. Entity
-display and visibility queries do not spend turns.
+the full combat turn loop remains unfinished. PR12 does advance enemy movement
+and behavior once per spent action. Entity display and visibility queries do not
+spend turns.
 
 Run `cargo fmt --check`, `cargo test --offline`, and
 `cargo clippy --offline --all-targets -- -D warnings` before review. In a terminal,
