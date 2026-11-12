@@ -139,23 +139,28 @@ impl Game {
 
     /// Carried entries followed by occupied weapon/armor slots, borrowing originals.
     pub fn inventory_rows(&self) -> Vec<(InventorySelection, &item::Item)> {
-        let Some(player) = self.player.as_ref() else {
-            return Vec::new();
-        };
-        let mut rows: Vec<_> = player
-            .get_inventory()
-            .items()
-            .iter()
-            .enumerate()
-            .map(|(index, item)| (InventorySelection::Carried(index), item))
-            .collect();
-        let equipment = player.get_equipped_items();
-        for slot in [EquipmentSlot::Weapon, EquipmentSlot::Armor] {
-            if let Some(item) = equipment.item(slot) {
-                rows.push((InventorySelection::Equipped(slot), item));
-            }
-        }
-        rows
+        self.inventory_entries().collect()
+    }
+
+    /// Shares selection order between display rows and item actions.
+    fn inventory_entries(&self) -> impl Iterator<Item = (InventorySelection, &item::Item)> {
+        self.player.iter().flat_map(|player| {
+            let carried = player
+                .get_inventory()
+                .items()
+                .iter()
+                .enumerate()
+                .map(|(index, item)| (InventorySelection::Carried(index), item));
+            let equipped = [EquipmentSlot::Weapon, EquipmentSlot::Armor]
+                .into_iter()
+                .filter_map(move |slot| {
+                    player
+                        .get_equipped_items()
+                        .item(slot)
+                        .map(|item| (InventorySelection::Equipped(slot), item))
+                });
+            carried.chain(equipped)
+        })
     }
 
     /// Reports whether the application loop should exit and restore the terminal.
@@ -164,7 +169,8 @@ impl Game {
     }
 
     /// Processes an action and advances enemies and effects once if a turn was
-    /// spent. Menu navigation, pause, and redraws do not advance combat.
+    /// spent. Accepted descent ticks only player effects before replacing the floor.
+    /// Menu navigation, pause, and redraws do not advance combat.
     pub fn process_action(&mut self, action: &Action) -> TurnResult {
         if self.should_quit {
             return TurnResult::NotSpent;
@@ -245,7 +251,7 @@ impl Game {
                     TurnResult::NotSpent
                 }
                 Action::MoveDown => {
-                    let last = self.inventory_rows().len().saturating_sub(1);
+                    let last = self.inventory_len().saturating_sub(1);
                     self.inventory_selection = self.inventory_selection.saturating_add(1).min(last);
                     TurnResult::NotSpent
                 }
@@ -271,13 +277,7 @@ impl Game {
                 TurnResult::NotSpent
             }
             Screen::GameOver => {
-                let last = self
-                    .log
-                    .history()
-                    .iter()
-                    .map(|message| message.lines().count())
-                    .sum::<usize>()
-                    .saturating_sub(1);
+                let last = self.log.history_lines().saturating_sub(1);
                 match action {
                     Action::Confirm | Action::Back => self.return_to_menu(),
                     Action::HistoryUp => {
@@ -308,6 +308,16 @@ impl Game {
         self.screen = self.help_origin.take().unwrap_or(Screen::MainMenu);
     }
 
+    /// Counts selectable rows without allocating display entries.
+    fn inventory_len(&self) -> usize {
+        self.player.as_ref().map_or(0, |player| {
+            let equipment = player.get_equipped_items();
+            player.get_inventory().items().len()
+                + usize::from(equipment.weapon.is_some())
+                + usize::from(equipment.armor.is_some())
+        })
+    }
+
     /// Performs one item attempt; success and rejection share the combat boundary.
     fn item_action(&mut self, action: &Action) -> TurnResult {
         if !self
@@ -321,9 +331,9 @@ impl Game {
             self.pick_up_item();
         } else {
             let selected = self
-                .inventory_rows()
-                .get(self.inventory_selection)
-                .map(|(selection, item)| (*selection, item.name.clone()));
+                .inventory_entries()
+                .nth(self.inventory_selection)
+                .map(|(selection, item)| (selection, item.name.clone()));
             let message = match (action, selected) {
                 (Action::EquipItem, Some((InventorySelection::Carried(index), name))) => self
                     .player
@@ -354,7 +364,7 @@ impl Game {
         }
         self.inventory_selection = self
             .inventory_selection
-            .min(self.inventory_rows().len().saturating_sub(1));
+            .min(self.inventory_len().saturating_sub(1));
         TurnResult::Spent
     }
 

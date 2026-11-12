@@ -6,6 +6,7 @@
 pub struct MessageLog {
     messages: Vec<String>,
     recent_capacity: usize,
+    history_lines: usize,
 }
 
 impl MessageLog {
@@ -14,11 +15,13 @@ impl MessageLog {
         Self {
             messages: Vec::new(),
             recent_capacity: capacity,
+            history_lines: 0,
         }
     }
 
     /// Appends a message to the current session history.
     pub fn add_message(&mut self, message: String) {
+        self.history_lines = self.history_lines.saturating_add(message.lines().count());
         self.messages.push(message);
     }
 
@@ -33,97 +36,118 @@ impl MessageLog {
         &self.messages
     }
 
+    /// Number of logical history lines, including interior blank lines.
+    pub fn history_lines(&self) -> usize {
+        self.history_lines
+    }
+
     /// Clears both full history and the recent window when the session is reset.
     pub fn clear(&mut self) {
         self.messages.clear();
+        self.history_lines = 0;
     }
 }
 
-/// Tells Rust to compile test module only during testing
 #[cfg(test)]
 mod tests {
     use super::MessageLog;
 
-    #[test] // Test function
+    #[test]
+    fn history_line_count_tracks_multiline_messages_and_session_reset() {
+        let mut log = MessageLog::new(1);
+        for message in ["oldest\n\nsecond\n", "", "newest"] {
+            log.add_message(message.to_owned());
+        }
+        assert_eq!(log.history_lines(), 4);
+        assert_eq!(log.messages(), &["newest"]);
+        log.clear();
+        assert_eq!(log.history_lines(), 0);
+        log.add_message("new session".to_owned());
+        assert_eq!(log.history_lines(), 1);
+    }
+
+    #[test]
     fn new_log_is_empty() {
-        let log = MessageLog::new(3); // Create new MessageLog log with capacity 3
+        let log = MessageLog::new(3);
 
-        assert!(log.messages().is_empty()); // Check to see if log is empty -> expected result is empty log
+        assert!(log.messages().is_empty());
     }
 
-    #[test] // Test function
+    #[test]
     fn added_messages_keep_their_order() {
-        let mut log = MessageLog::new(3); // Create new MessageLog log with capacity 3
+        let mut log = MessageLog::new(3);
 
-        log.add_message("Entered the mine.".to_string()); // Add string message to log
-        log.add_message("Found a pickaxe.".to_string()); // Add string message to log
+        log.add_message("Entered the mine.".to_string());
+        log.add_message("Found a pickaxe.".to_string());
 
-        assert_eq!(log.messages().len(), 2); // Checks whether length of log matches expected length
-        assert_eq!(log.messages()[0], "Entered the mine."); // Expected message at log index 0
-        assert_eq!(log.messages()[1], "Found a pickaxe.") // Expected message at log index 1
+        assert_eq!(log.messages().len(), 2);
+        assert_eq!(log.messages()[0], "Entered the mine.");
+        assert_eq!(log.messages()[1], "Found a pickaxe.")
     }
 
-    #[test] // Test function
-    fn full_log_discards_oldest_message() {
-        let mut log = MessageLog::new(2); // Create new MessageLog log with capacity 2
+    #[test]
+    fn recent_window_excludes_oldest_message() {
+        let mut log = MessageLog::new(2);
 
-        log.add_message("First".to_string()); // Add message to log
-        log.add_message("Second".to_string()); // Add message to log
-        log.add_message("Third".to_string()); // Add message to log
+        log.add_message("First".to_string());
+        log.add_message("Second".to_string());
+        log.add_message("Third".to_string());
 
-        assert_eq!(log.messages().len(), 2); // Checks whether length of log matches expected length
-        assert_eq!(log.messages()[0], "Second"); // Expected message at log index 0
-        assert_eq!(log.messages()[1], "Third"); // Expected message at log index 1
+        assert_eq!(log.messages().len(), 2);
+        assert_eq!(log.messages()[0], "Second");
+        assert_eq!(log.messages()[1], "Third");
     }
 
-    #[test] // Test function
-    fn zero_capacity_does_not_store_messages() {
-        let mut log = MessageLog::new(0); // Create new MessageLog log with capacity 0
+    #[test]
+    fn zero_capacity_hides_recent_messages_but_retains_history() {
+        let mut log = MessageLog::new(0);
 
-        log.add_message("Ignored".to_string()); // Add message to log with capacity 0
+        log.add_message("Retained".to_string());
 
-        assert!(log.messages().is_empty()); // Expected to still have empty log
+        assert!(log.messages().is_empty());
+        assert_eq!(log.history(), &["Retained"]);
+        assert_eq!(log.history_lines(), 1);
     }
 
-    #[test] // Test function
+    #[test]
     fn clear_removes_messages_and_log_can_be_reused() {
-        let mut log = MessageLog::new(2); // Create new MessageLog log with capacity 2
+        let mut log = MessageLog::new(2);
 
-        log.add_message("First".to_string()); // Add message to log
-        log.clear(); // Clear log
+        log.add_message("First".to_string());
+        log.clear();
 
-        assert!(log.messages().is_empty()); // Check for empty log -> Log expected to be empty
+        assert!(log.messages().is_empty());
 
-        log.add_message("After clear".to_string()); // Add new message to log after log clear
+        log.add_message("After clear".to_string());
 
-        assert_eq!(log.messages().len(), 1); // Test for log length -> Expected to be length 1
-        assert_eq!(log.messages()[0], "After clear"); // Test for expected string at log index 0
+        assert_eq!(log.messages().len(), 1);
+        assert_eq!(log.messages()[0], "After clear");
     }
 
-    #[test] // Test function
+    #[test]
     fn capacity_one_keeps_only_latest_message() {
-        let mut log = MessageLog::new(1); // Create new MessageLog log with capacity 1
+        let mut log = MessageLog::new(1);
 
-        log.add_message("Old".to_string()); // Add message to log
-        log.add_message("New".to_string()); // Add message to log
+        log.add_message("Old".to_string());
+        log.add_message("New".to_string());
 
-        assert_eq!(log.messages().len(), 1); // Test for log length -> Expected to be length 1
-        assert_eq!(log.messages()[0], "New"); // Test for expected string at log index 0
+        assert_eq!(log.messages().len(), 1);
+        assert_eq!(log.messages()[0], "New");
     }
 
-    #[test] // Test function
+    #[test]
     fn history_retains_all_session_messages() {
-        let mut log = MessageLog::new(2); // Create new MessageLog log with capacity 2
+        let mut log = MessageLog::new(2);
 
-        log.add_message("First".to_string()); // Add message to log
-        log.add_message("Second".to_string()); // Add message to log
-        log.add_message("Third".to_string()); // Add message to log
+        log.add_message("First".to_string());
+        log.add_message("Second".to_string());
+        log.add_message("Third".to_string());
 
-        assert_eq!(log.messages().len(), 2); // Test for log length -> Expected to be length 2
-        assert_eq!(log.history().len(), 3); // Test for history length -> Expected to be length 3
+        assert_eq!(log.messages().len(), 2);
+        assert_eq!(log.history().len(), 3);
 
-        assert_eq!(log.history()[0], "First"); // Test for log history at index to match string
-        assert_eq!(log.history()[1], "Second"); // Test for log history at index to match string
-        assert_eq!(log.history()[2], "Third"); // Test for log history at index to match string
+        assert_eq!(log.history()[0], "First");
+        assert_eq!(log.history()[1], "Second");
+        assert_eq!(log.history()[2], "Third");
     }
 }

@@ -159,18 +159,28 @@ pub fn draw_status(frame: &mut Frame, area: Rect, status: &StatusView<'_>, theme
 
 /// Draws the newest message lines in chronological order, bounded by panel height.
 pub fn draw_messages(frame: &mut Frame, area: Rect, messages: &[&str], theme: &Theme) {
+    let lines = messages
+        .iter()
+        .rev()
+        .flat_map(|message| message.lines().rev());
+    draw_message_lines(frame, area, lines, messages.is_empty(), theme);
+}
+
+/// Draws newest-first logical lines, collecting only what fits in the panel.
+/// Lines are already split so interior blank lines retain their scroll positions.
+pub(super) fn draw_message_lines<'a>(
+    frame: &mut Frame,
+    area: Rect,
+    lines: impl Iterator<Item = &'a str>,
+    empty: bool,
+    theme: &Theme,
+) {
     let block = panel(" Message log ", theme);
     let height = usize::from(block.inner(area).height);
-    let lines: Vec<Line<'_>> = if messages.is_empty() {
+    let lines: Vec<Line<'_>> = if empty {
         vec![Line::from("No messages yet.")]
     } else {
-        let mut lines: Vec<_> = messages
-            .iter()
-            .rev()
-            .flat_map(|message| message.lines().rev())
-            .take(height)
-            .map(Line::from)
-            .collect();
+        let mut lines: Vec<_> = lines.take(height).map(Line::from).collect();
         lines.reverse();
         lines
     };

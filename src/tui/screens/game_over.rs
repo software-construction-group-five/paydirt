@@ -1,6 +1,6 @@
 //! Final session summary presentation.
 
-use super::{centered, panel, playing::draw_messages};
+use super::{centered, panel, playing::draw_message_lines};
 use crate::tui::{RenderView, theme::Theme};
 use ratatui::{
     Frame,
@@ -12,13 +12,18 @@ use ratatui::{
 /// Draws the available outcome and final depth without assuming a cause of death.
 pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
     let area = frame.area();
-    let history: Vec<&str> = view
+    let line_count = view
         .messages
         .iter()
-        .flat_map(|message| message.lines())
-        .collect();
-    let offset = view.history_offset.min(history.len().saturating_sub(1));
-    let history = &history[..history.len().saturating_sub(offset)];
+        .map(|message| message.lines().count())
+        .sum::<usize>();
+    let offset = view.history_offset.min(line_count.saturating_sub(1));
+    let history = view
+        .messages
+        .iter()
+        .rev()
+        .flat_map(|message| message.lines().rev())
+        .skip(offset);
     let summary_area = if view.messages.is_empty() {
         area
     } else {
@@ -32,7 +37,7 @@ pub fn draw(frame: &mut Frame, view: &RenderView<'_>, theme: &Theme) {
         };
         let [summary, log] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(log_height)]).areas(area);
-        draw_messages(frame, log, history, theme);
+        draw_message_lines(frame, log, history, view.messages.is_empty(), theme);
         summary
     };
     let depth = view.final_depth.map_or_else(
@@ -83,6 +88,23 @@ mod tests {
             let output = text(&draw_screen(20, 4, Screen::GameOver, &view));
             assert!(output.contains(expected), "offset {offset}: {output}");
         }
+    }
+
+    #[test]
+    fn scrolling_preserves_blank_history_lines() {
+        let messages = ["oldest\n\nnewest"];
+        let view = RenderView {
+            messages: &messages,
+            history_offset: 1,
+            ..Default::default()
+        };
+        // A one-line history viewport should show the blank line itself.
+        let output = text(&draw_screen(20, 3, Screen::GameOver, &view));
+        assert!(!output.contains("oldest"));
+        assert!(!output.contains("newest"));
+        let output = text(&draw_screen(20, 4, Screen::GameOver, &view));
+        assert!(output.contains("oldest"));
+        assert!(!output.contains("newest"));
     }
 
     #[test]
