@@ -114,7 +114,8 @@ previously seen tiles. Invalid origins clear current visibility but preserve mem
 
 Sight has no distance limit. Walls, rocks, and closed doors block sight; water,
 floor, stairs, and open doors transmit it. The first opaque tile remains visible.
-Straight rays cannot pass diagonally through blocked corners. Entities do not
+All eight adjacent tiles are visible regardless of blockage, revealing room corners.
+Beyond that neighborhood, straight rays cannot pass diagonally through blocked corners. Entities do not
 block sight. `Map::has_line_of_sight(origin, target)` queries geometry without
 changing memory; `Map::is_visible(position)` reads the last visibility update.
 

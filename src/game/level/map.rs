@@ -150,13 +150,17 @@ impl Map {
     }
 
     /// Tests a straight ray between tile centers, without changing exploration.
-    /// The first opaque tile is visible, but tiles behind it are hidden. Rays
-    /// crossing an exact grid corner require both side tiles to be transparent,
-    /// preventing diagonal sight through wall/door corners. Entities do not block
-    /// sight. Either endpoint outside the map returns false.
+    /// Always reveals all eight adjacent tiles, even across blocked corners.
+    /// Farther away, the first opaque tile is visible but hides tiles behind it.
+    /// Beyond that neighborhood, rays crossing an exact grid corner require both
+    /// side tiles to be transparent. Entities do not block sight. Either endpoint
+    /// outside the map returns false.
     pub fn has_line_of_sight(&self, origin: Position, target: Position) -> bool {
         if !self.in_bounds(origin) || !self.in_bounds(target) {
             return false;
+        }
+        if origin.distance(target) <= 1 {
+            return true;
         }
         let mut position = origin;
         let dx = origin.x.abs_diff(target.x) as u128;
@@ -303,10 +307,11 @@ mod tests {
     }
 
     #[test]
-    fn exact_corners_do_not_allow_diagonal_peeking_and_sight_is_symmetric() {
+    fn adjacent_corners_are_visible_but_distant_peeking_is_blocked_and_sight_is_symmetric() {
         let mut map = open_map(5, 5);
         map.set(Position::new(1, 0), TileType::Wall);
-        assert!(!map.has_line_of_sight(Position::new(0, 0), Position::new(1, 1)));
+        assert!(map.has_line_of_sight(Position::new(0, 0), Position::new(1, 1)));
+        assert!(!map.has_line_of_sight(Position::new(0, 0), Position::new(2, 2)));
         map.set(Position::new(2, 2), TileType::Rock);
         for from in map.positions().filter(|&pos| !map.blocks_sight(pos)) {
             for to in map.positions().filter(|&pos| !map.blocks_sight(pos)) {
@@ -317,6 +322,28 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn visibility_reveals_all_eight_neighbors_through_blockers_and_remembers_them() {
+        let mut map = Map::new(5, 5);
+        let origin = Position::new(2, 2);
+        map.set(origin, TileType::Floor);
+        map.set(Position::new(1, 2), TileType::Rock);
+        map.set(Position::new(2, 1), TileType::Door { open: false });
+        map.update_visibility(origin);
+        for position in map.positions() {
+            let tile = map.get(position).unwrap();
+            assert_eq!(tile.visible, origin.distance(position) <= 1);
+            assert_eq!(tile.seen, tile.visible);
+        }
+        map.update_visibility(Position::new(4, 4));
+        let corner = map.get(Position::new(1, 1)).unwrap();
+        assert!(corner.seen);
+        assert!(!corner.visible);
+        map.update_visibility(Position::new(0, 0));
+        assert!(map.is_visible(Position::new(1, 1)));
+        assert!(!map.has_line_of_sight(Position::new(0, 0), Position::new(usize::MAX, 0)));
     }
 
     #[test]
