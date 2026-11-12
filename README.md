@@ -1,4 +1,4 @@
-# Paydirt — v1.0
+# Paydirt - v1.0
 
 A turn-based terminal roguelike about Paydirt Pete’s daring escape from the mine.
 Explore generated dungeon floors, fight mine creatures, collect better equipment,
